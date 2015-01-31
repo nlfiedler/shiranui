@@ -8,6 +8,7 @@
 ## Investigate
 
 * Is there something like `defer` for Rust?
+    * Implement the `Drop` trait for such resources in order to clean up
 * Is there something like [gocheck](https://labix.org/gocheck) for Rust?
 
 ## Improvements to Make over Bakeneko
