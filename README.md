@@ -29,12 +29,13 @@ The astute reader will notice that I have a similar project written in Go (baken
         * Go has only integers and the `iota` keyword
     * Generics to enable honest-to-goodness reusable collections
         * Avoids the dreaded `interface{}` everywhere
-* Everything here: http://crufter.com/2014/12/01/everyday-hassles-in-go/
-* Everything here: http://yager.io/programming/go.html
 * Rust does not have a `nil` value, the infamous billion dollar mistake
     * While Rust has `()`, it has its own type (`unit`), so cannot be used mistakenly
 * Rust has pattern matching which prevents missed cases
 * Rust is expression oriented (i.e. `if` is an expression)
+* Additional reasons given in these two, nicely written posts:
+    * http://crufter.com/2014/12/01/everyday-hassles-in-go/
+    * http://yager.io/programming/go.html
 
 ### Other Scheme interpreters in Rust
 
