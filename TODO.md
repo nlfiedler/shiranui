@@ -5,19 +5,41 @@
 * Develop a crate containing both a library and a binary (the REPL)
 * Goal is R7RS compliance in the form of a library and an accompanying REPL
 
+## High Level
+
+* Lexer
+* Parser
+* Basic interpreter
+* Byte code compiler
+* Stack-based byte code VM
+* Hygienic macros
+* Derived expressions (e.g. `case`, `let`, `do`)
+* Standard procedures
+* REPL
+
 ## Investigate
 
 * Is there something like `defer` for Rust?
     * Implement the `Drop` trait for such resources in order to clean up
+    * In addition, there is the `Finally` trait in `std::finally`
 * Is there something like [gocheck](https://labix.org/gocheck) for Rust?
+    * Something akin to RSpec: https://github.com/farcaller/shiny
+    * With pattern matching it should be easy to write terse test code
+        * `assert_eq!("4".parse::<u32>(), Some(4));`
+        * `assert_eq!("j".parse::<u32>(), None);`
+    * See also `Result` in `std::result` for `.ok()`
+    * See also `Option` in `std::option` for `.expect()`
 
 ## Improvements to Make over Bakeneko
 
-### Implementation
+### Parser
 
 * The result of parsing/expanding should already be wrapped with `(begin)`.
 * Parsing and expanding should be combined into one step.
     * Fine to have private API for testing purposes, but public API should be a single `fn`.
+
+## Environment
+
 * Will want a left-leaning red-black tree implementation at some point.
     * https://github.com/stevej/rustled
 
