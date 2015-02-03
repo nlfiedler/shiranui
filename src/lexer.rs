@@ -23,17 +23,16 @@
 //!
 // TODO: write better module documentation
 
+// TODO: should be able to remove these once the code stabilizes
 #![allow(dead_code)]
-#![allow(unstable)]
 #![allow(unused_imports)]
 #![allow(unused_variables)]
 
 use std::fmt;
-use std::sync::mpsc::{SyncSender, Receiver};
-use std::sync::mpsc;
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 
-#[derive(Copy, PartialEq, Show)]
+#[derive(Copy, PartialEq, Debug)]
 pub enum TokenType {
     Error,
     OpenParen,
@@ -55,7 +54,7 @@ pub enum TokenType {
     EndOfFile
 }
 
-impl fmt::String for TokenType {
+impl fmt::Display for TokenType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             TokenType::Error => write!(f, "Error"),
@@ -80,52 +79,52 @@ impl fmt::String for TokenType {
     }
 }
 
-#[derive(Copy, PartialEq, Show)]
-pub struct Token<'a> {
+#[derive(PartialEq, Debug)]
+pub struct Token {
     pub typ: TokenType,
-    pub val: &'a str,
-    pub row: i32,
-    pub col: i32
+    pub val: String,
+    pub row: usize,
+    pub col: usize
 }
 
-impl <'a> fmt::String for Token<'a> {
+impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "TODO: String behavior for Token")
     }
 }
 
 // lexer holds the state of the scanner.
-struct Lexer<'a> {
+struct Lexer {
     // used only for error reports
-    name: &'a str,
+    name: String,
     // the string being scanned
-    input: &'a str,
+    input: String,
     // start position of the current token
-    start: i32,
+    start: usize,
     // current position within the input
-    pos: i32,
+    pos: usize,
     // width of last rune read from input
-    width: i32,
+    width: usize,
     // current line of program text being read
-    row: i32,
+    row: usize,
     // current column of text being read
-    col: i32,
+    col: usize,
     // true if fold-case is enabled
     folding: bool,
     // channel sender for scanned tokens
-    chan: SyncSender<Token<'a>>
+    chan: SyncSender<Token>
 }
 
-impl <'a> fmt::String for Lexer<'a> {
+impl fmt::Display for Lexer {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "TODO: String behavior for Lexer")
     }
 }
 
-impl <'a> Lexer<'a> {
-    fn new(name: &'a str, input: &'a str, chan: SyncSender<Token<'a>>) -> Lexer<'a> {
+impl Lexer {
+    fn new(name: &str, input: String, chan: SyncSender<Token>) -> Lexer {
         Lexer {
-            name: name,
+            name: name.to_string(),
             input: input,
             start: 0,
             pos: 0,
@@ -136,39 +135,64 @@ impl <'a> Lexer<'a> {
             chan: chan
         }
     }
+
+    // emit passes the current token back to the client via the channel.
+    fn emit(&mut self, t: TokenType) {
+        let text = self.input.as_slice().slice(self.start, self.pos);
+        let _ = self.chan.send(Token {
+            typ: t,
+            val: text.to_string(),
+            row: self.row,
+            col: self.col
+        });
+        self.start = self.pos
+    }
+
+    // emitText passes the given token back to the client via the channel.
+    fn emit_text(&mut self, t: TokenType, text: &str) {
+        // TODO: duplicate code in emit, can it be helped? borrowing error if emit calls emit_text
+        let _ = self.chan.send(Token {
+            typ: t,
+            val: text.to_string(),
+            row: self.row,
+            col: self.col
+        });
+        self.start = self.pos
+    }
 }
 
 // StateFn represents the state of the scanner as a function that returns
 // the next state. As a side effect of the function, tokens may be emitted.
 // Cannot use recursive types, as in Go, so must wrap in a struct.
-struct StateFn(fn(&Lexer) -> StateFn);
+struct StateFn(fn(&mut Lexer) -> Option<StateFn>);
 
 /// lex initializes the lexer to lex the given Scheme input text, returning
 /// the channel receiver from which tokens are received.
-// fn lex<'a>(name: &str, input: &str) /*-> Receiver<Token<'a>>*/ {
-    // let sanitized = sanitize_input(input);
+fn lex(name: &str, input: &str) -> Receiver<Token> {
+    let sanitized = sanitize_input(input);
 
-    // TODO: get this one line to compile, then get the others piece by piece
-    // let (tx, rx) = mpsc::sync_channel(1);
-    // let thread_tx = tx.clone();
-    // let lexer = Lexer::new(name, sanitized, thread_tx);
+    let (tx, rx) = mpsc::sync_channel(1);
+    let thread_tx = tx.clone();
+    let mut lexer = Lexer::new(name, sanitized, thread_tx);
 
-    // thread::Thread::spawn(move || {
-    //     let mut state = StateFn(lex_start);
-    //     loop {
-    //         let StateFn(fun) = state;
-    //         state = fun(&lexer);
-    //         let StateFn(next) = state;
-    //         match next {
-    //             lex_done => break,
-    //             _ => continue
-    //         }
-    //     }
-    //     // TODO: close the channel, or let it fall out of scope?
-    // });
-    // rx
-// }
+    thread::Thread::spawn(move || {
+        // inform the compiler what the type of state _really_ is
+        let mut state = lex_start as fn(&mut Lexer) -> Option<StateFn>;
+        loop {
+            match state(&mut lexer) {
+                Some(next) => {
+                    let StateFn(state_fn) = next;
+                    state = state_fn;
+                },
+                None => break
+            }
+        }
+        // TODO: close the channel, or let it fall out of scope?
+    });
+    rx
+}
 
+// TODO: document
 fn sanitize_input(input: &str) -> String {
     input.replace("\r\n", "\n").replace("\r", "\n")
 }
@@ -178,12 +202,12 @@ fn sanitize_input(input: &str) -> String {
 // lex_start reads the next token from the input and determines
 // what to do with that token, returning the appropriate state
 // function.
-fn lex_start(l: &Lexer) -> StateFn {
+fn lex_start(l: &mut Lexer) -> Option<StateFn> {
     // r := l.next()
     // switch r {
     // case eof:
     //     l.emit(tokenEOF)
-    //     return lex_done
+    //     return None
     // case '(':
     //     l.emit(tokenOpenParen)
     //     return lex_start
@@ -211,8 +235,67 @@ fn lex_start(l: &Lexer) -> StateFn {
     //     l.backup()
     //     return lex_identifier
     // }
-    StateFn(lex_start)
+    l.emit(TokenType::EndOfFile);
+    None
 }
+
+#[cfg(test)]
+mod test {
+
+    use super::{lex, sanitize_input, TokenType};
+
+    #[test]
+    fn test_sanitize_input() {
+        // none, no change
+        assert_eq!(sanitize_input("abc"), "abc");
+        // mix of everything
+        assert_eq!(sanitize_input("a\r\nb\rc\n"), "a\nb\nc\n");
+        // DOS style
+        assert_eq!(sanitize_input("a\r\nb\r\nc\r\n"), "a\nb\nc\n");
+        // old Mac style
+        assert_eq!(sanitize_input("a\rb\rc\r"), "a\nb\nc\n");
+        // Unix style, no change
+        assert_eq!(sanitize_input("a\nb\nc\n"), "a\nb\nc\n");
+    }
+
+// TODO: test receiving a token
+// fn main() {
+//     let rx = make_chan();
+//     if let Some(token) = rx.recv().ok() {
+//         println!("received token [{}, {}]: of type {} w/ val {}",
+//                  token.row,
+//                  token.col,
+//                  token.typ,
+//                  token.val);
+//     }
+// }
+
+    #[test]
+    fn test_empty_input() {
+        let rx = lex("test", "");
+        if let Some(token) = rx.recv().ok() {
+            assert_eq!(token.typ, TokenType::EndOfFile);
+        } else {
+            assert!(false);
+        }
+    }
+}
+
+// TODO: * Find out what `Fn` and `FnMut` are about
+// TODO:     * Appear in `std::ops`
+// TODO: * Try to use the `char` type and it's helpful functions (e.g. `is_whitespace()`)
+// TODO: * I like the `is_*` functions for checking if a character is whitespace, etc
+// TODO:     * Look at the those in `lexer.rs` in r6.rs project
+// TODO: * I like the fancy pattern matching that oxischeme uses in `read.rs`
+// TODO: * Use `std::iter::Peekable` on a `std::old_io::Reader` to handle chars explicitly
+// TODO:     * See `std::old_io::Chars` for reading UTF-8 encoded characters
+// TODO:     * Avoid bytes and all that rune decoding business
+// TODO:     * To handle `backup()`, use a simple stack, and `next()` pulls from that first
+// TODO:     * Double-check that `&str` and `String` do not already provide character iteration
+// TODO:     * Test if it supports accented character collation
+// TODO: * Look at `std::iter` for `Skip`, `SkipWhile`, `Take`, and `TakeWhile`
+// TODO:     * They may shorten the lexing code, if they are applicable
+// TODO: * Be sure to use a `std::old_io::BufferedReader` when reading files
 
 // TODO: implement and test lexing an empty string, returning EndOfFile over channel
 // TODO: implement and test lexing a OpenParen
@@ -231,21 +314,3 @@ fn lex_start(l: &Lexer) -> StateFn {
 // TODO: implement and test lexing a ByteVector
 // TODO: implement and test lexing a LabelDefinition
 // TODO: implement and test lexing a LabelReference
-
-fn lex_done(l: &Lexer) -> StateFn {
-    StateFn(lex_done)
-}
-
-#[test]
-fn test_sanitize_input() {
-    // none at all
-    assert_eq!(sanitize_input("abc"), "abc");
-    // mix of everything
-    assert_eq!(sanitize_input("a\r\nb\rc\n"), "a\nb\nc\n");
-    // DOS style
-    assert_eq!(sanitize_input("a\r\nb\r\nc\r\n"), "a\nb\nc\n");
-    // old Mac style
-    assert_eq!(sanitize_input("a\rb\rc\r"), "a\nb\nc\n");
-    // Unix style, no change
-    assert_eq!(sanitize_input("a\nb\nc\n"), "a\nb\nc\n");
-}

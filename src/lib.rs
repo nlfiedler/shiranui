@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-pub mod lexer;
+// TODO: should be able to remove these once the API stabilizes
+#![feature(collections)]
+#![feature(core)]
+#![feature(std_misc)]
 
-#[test]
-fn it_works() {
-}
+pub mod lexer;
