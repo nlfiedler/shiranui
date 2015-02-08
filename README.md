@@ -33,6 +33,7 @@ The astute reader will notice that I have a similar project written in Go (baken
     * While Rust has `()`, it has its own type (`unit`), so cannot be used mistakenly
 * Rust has pattern matching which prevents missed cases
 * Rust is expression oriented (i.e. `if` is an expression)
+* Rust permits fine-grained visibility of program items via nested modules
 * Additional reasons given in these two, nicely written posts:
     * http://crufter.com/2014/12/01/everyday-hassles-in-go/
     * http://yager.io/programming/go.html
