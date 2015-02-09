@@ -143,7 +143,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    // TODO: copy next(), backup(), ignore(), and rewind() basically as-is from lexer.go
+    // TODO: copy backup() and rewind() basically as-is from lexer.go
     // TODO: --> use StrExt.char_range_at() and StrExt.char_range_at_reverse()
     // TODO: --> replace utf8.DecodeRuneInString() to StrExt.char_range_at()
     // TODO: --> replace utf8.DecodeLastRuneInString() with StrExt.char_range_at_reverse()
@@ -282,8 +282,8 @@ fn lex_error(l: &mut Lexer) -> Option<StateFn> {
 
 // errorf returns an error token and terminates the scan by passing back
 // a nil pointer that will be the next state.
-fn errorf(l: &mut Lexer, message: String) -> Option<StateFn> {
-    l.emit_text(TokenType::Error, message.as_slice());
+fn errorf(l: &mut Lexer, message: &str) -> Option<StateFn> {
+    l.emit_text(TokenType::Error, message);
     Some(StateFn(lex_error))
 }
 
@@ -314,6 +314,15 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
                 },
                 ' ' | '\t' | '\r' | '\n' => {
                     return Some(StateFn(lex_separator));
+                },
+                ';' => {
+                    return Some(StateFn(lex_comment));
+                },
+                '#' => {
+                    return Some(StateFn(lex_hash));
+                },
+                '[' | ']' | '{' | '}' => {
+                    return errorf(l, "use of reserved character")
                 }
                 _ => return None
             }
@@ -327,14 +336,8 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
     //     // let lex_number sort out what type of number it is
     //     l.backup()
     //     return lex_number
-    // case ';':
-    //     return lex_comment
-    // case '#':
-    //     return lex_hash
     // case '\'', '`', ',':
     //     return lex_quote
-    // case '[', ']', '{', '}':
-    //     return l.errorf("use of reserved character: %c", r)
     // default:
     //     // let lex_identifier sort out what exactly this is
     //     l.backup()
@@ -365,7 +368,7 @@ fn lex_string(l: &mut Lexer) -> Option<StateFn> {
             },
             None => {
                 let start = l.start;
-                return errorf(l, format!("unclosed quoted string starting at {}", start));
+                return errorf(l, "unclosed quoted string");
             }
         }
     }
@@ -374,11 +377,196 @@ fn lex_string(l: &mut Lexer) -> Option<StateFn> {
 
 /// `lex_separator` expects the current position to be the start of a
 /// separator and advances until it finds the end of that separator.
-/// No token will be emitted since separators are meaningless.
+/// No token will be emitted since separators are ignored.
 fn lex_separator(l: &mut Lexer) -> Option<StateFn> {
     l.accept_run(" \t\n\r");
     l.ignore();
     Some(StateFn(lex_start))
+}
+
+/// `lex_comment` expects the current position to be the start of a
+/// comment and advances until it finds the end of the line/file.
+/// No token will be emitted since comments are ignored.
+fn lex_comment(l: &mut Lexer) -> Option<StateFn> {
+    loop {
+        match l.next() {
+            Some(ch) => {
+                match ch {
+                    '\n' | '\r' => {
+                        // whitespace after comment is significant (R7RS 2.2),
+                        // but we ignore whitespace anyway
+                        l.ignore();
+                        return Some(StateFn(lex_start));
+                    },
+                    _ => continue
+                }
+            },
+            None => {
+                return Some(StateFn(lex_start));
+            }
+        }
+    }
+    unreachable!();
+}
+
+/// lex_block_comment expects the current position to be the start of a block
+/// comment (#|...|#) and advances until it finds the end of the comment.
+/// Comments may be nested (#|..#|..|#..|#) but must be properly so, as stated
+/// in R7RS 2.2.
+fn lex_block_comment(l: &mut Lexer) -> Option<StateFn> {
+    let mut nesting = 1;
+    loop {
+        match l.next() {
+            Some(ch) => {
+                match ch {
+                    '#' => {
+                        match l.next() {
+                            Some(ch) => {
+                                match ch {
+                                    '|' => nesting += 1,
+                                    _ => continue
+                                }
+                            },
+                            None => break
+                        }
+                    },
+                    '|' => {
+                        match l.next() {
+                            Some(ch) => {
+                                match ch {
+                                    '#' => {
+                                        nesting -= 1;
+                                        if nesting == 0 {
+                                            l.ignore();
+                                            return Some(StateFn(lex_start))
+                                        }
+                                    },
+                                    _ => continue
+                                }
+                            },
+                            None => break
+                        }
+                    },
+                    _ => continue
+                }
+            },
+            None => break
+        }
+    }
+    let start = l.start;
+    return errorf(l, "unclosed block comment");
+}
+
+/// `lex_hash` processes all of the # tokens.
+fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
+    match l.next() {
+        Some(ch) => {
+            match ch {
+                '|' => return Some(StateFn(lex_block_comment)),
+                _ => return errorf(l, "unrecognized hash value")
+            }
+        },
+        None => return errorf(l, "reached EOF in hash expression")
+    }
+    // case 't', 'f', 'T', 'F':
+    //     // allow for #true and #false
+    //     l.acceptRun("aelrsu")
+    //     sym := l.input[l.start+1 : l.pos]
+    //     if len(sym) > 1 && sym != "true" && sym != "false" {
+    //         return l.errorf("invalid boolean: %q", l.input[l.start:l.pos])
+    //     }
+    //     l.emit(tokenBoolean)
+    //     return lexStart
+    // case '(':
+    //     l.emit(tokenVector)
+    //     return lexStart
+    // case 'b', 'd', 'e', 'i', 'o', 'x':
+    //     // let lexNumber sort out the prefix
+    //     l.rewind()
+    //     return lexNumber
+    // case ';':
+    //     // line comment, with optional space; parser does the real work
+    //     l.accept(" ")
+    //     l.emit(tokenComment)
+    //     return lexStart
+    // case '\\':
+    //     // check for one of the many special character names
+    //     if l.folding {
+    //         l.acceptRun("abcdeiklmnoprstuwABCDEIKLMNOPRSTUW")
+    //     } else {
+    //         l.acceptRun("abcdeiklmnoprstuw")
+    //     }
+    //     sym := l.input[l.start+2 : l.pos]
+    //     if l.folding {
+    //         sym = strings.ToLower(sym)
+    //     }
+    //     if sym == "newline" {
+    //         l.emitText(tokenCharacter, "#\\\n")
+    //     } else if sym == "space" {
+    //         l.emitText(tokenCharacter, "#\\ ")
+    //     } else if sym == "alarm" {
+    //         l.emitText(tokenCharacter, "#\\\a")
+    //     } else if sym == "backspace" {
+    //         l.emitText(tokenCharacter, "#\\\b")
+    //     } else if sym == "delete" {
+    //         l.emitText(tokenCharacter, "#\\\u007f")
+    //     } else if sym == "escape" {
+    //         l.emitText(tokenCharacter, "#\\\u001b")
+    //     } else if sym == "null" {
+    //         l.emitText(tokenCharacter, "#\\\u0000")
+    //     } else if sym == "return" {
+    //         l.emitText(tokenCharacter, "#\\\r")
+    //     } else if sym == "tab" {
+    //         l.emitText(tokenCharacter, "#\\\t")
+    //     } else {
+    //         // go back to #, consume #\...
+    //         l.rewind()
+    //         l.next()
+    //         l.next()
+    //         // ...and assert that it is a single character
+    //         if !unicode.IsLetter(l.next()) {
+    //             return l.errorf("malformed character escape: %q", l.input[l.start:l.pos])
+    //         }
+    //         if isAlphaNumeric(l.peek()) {
+    //             l.next()
+    //             return l.errorf("malformed character escape: %q", l.input[l.start:l.pos])
+    //         }
+    //         l.emit(tokenCharacter)
+    //     }
+    //     return lexStart
+    // case 'u':
+    //     // byte vector support (e.g. #u8(...))
+    //     if r := l.next(); r == '8' {
+    //         if r := l.next(); r == '(' {
+    //             l.emit(tokenByteVector)
+    //             return lexStart
+    //         }
+    //     }
+    //     return l.errorf("unrecognized hash value: %q", l.input[l.start:l.pos])
+    // case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+    //     l.acceptRun("0123456789")
+    //     if r := l.next(); r == '#' {
+    //         l.emit(tokenLabelReference)
+    //     } else if r == '=' {
+    //         l.emit(tokenLabelDefinition)
+    //     } else {
+    //         return l.errorf("unrecognized hash value: %q", l.input[l.start:l.pos])
+    //     }
+    //     return lexStart
+    // case '!':
+    //     // handle #!fold-case and #!no-fold-case directives (R7RS 2.1)
+    //     l.acceptRun("no-fldcase")
+    //     sym := l.input[l.start+2 : l.pos]
+    //     if sym == "fold-case" {
+    //         l.folding = true
+    //     } else if sym == "no-fold-case" {
+    //         l.folding = false
+    //     } else {
+    //         return l.errorf("invalid directive: %q", l.input[l.start:l.pos])
+    //     }
+    //     l.ignore()
+    //     return lexStart
+    unreachable!();
 }
 
 #[cfg(test)]
@@ -478,11 +666,37 @@ mod test {
     }
 
     #[test]
+    fn test_reserved_characters() {
+        let mut map = HashMap::new();
+        map.insert("[", "use of reserved character");
+        map.insert("]", "use of reserved character");
+        map.insert("{", "use of reserved character");
+        map.insert("}", "use of reserved character");
+        verify_errors(map);
+    }
+
+    #[test]
     fn test_ignore_separators() {
         let mut vec = Vec::new();
         vec.push(ExpectedResult{typ: TokenType::OpenParen, val: "(".to_string()});
         vec.push(ExpectedResult{typ: TokenType::CloseParen, val: ")".to_string()});
-        verify_success(" (\n\t )\r\n", vec);
+        verify_success("     (\n\t )\r\n", vec);
+    }
+
+    #[test]
+    fn test_ignore_comments() {
+        let mut vec = Vec::new();
+        vec.push(ExpectedResult{typ: TokenType::OpenParen, val: "(".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::CloseParen, val: ")".to_string()});
+        verify_success(" ; foo \n   (\n ; bar \n )\n", vec);
+    }
+
+    #[test]
+    fn test_ignore_block_comments() {
+        let mut vec = Vec::new();
+        vec.push(ExpectedResult{typ: TokenType::OpenParen, val: "(".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::CloseParen, val: ")".to_string()});
+        verify_success("#| outer #| nested |# outer |# ( #| bar |# )", vec);
     }
 }
 
