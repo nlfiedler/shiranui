@@ -194,6 +194,55 @@ impl<'a> Lexer<'a> {
             Some(next.ch)
         }
     }
+
+    /// `peek` returns but does not consume the next rune in the input.
+    fn peek(&mut self) -> Option<char> {
+        if self.pos >= self.input.len() {
+            None
+        } else {
+            let next = self.input.char_range_at(self.pos);
+            Some(next.ch)
+        }
+    }
+
+    /// `ignore` skips over the pending input before this point.
+    fn ignore(&mut self) {
+        self.start = self.pos;
+    }
+
+    /// `accept` consumes the next rune if it's from the valid set.
+    fn accept(&mut self, valid: &str) -> bool {
+        match self.peek() {
+            Some(ch) => {
+                if valid.contains_char(ch) {
+                    // consume the character
+                    self.next();
+                    return true;
+                }
+            },
+            None => return false
+        }
+        false
+    }
+
+    /// `accept_run` consumes a run of runes from the valid set.
+    fn accept_run(&mut self, valid: &str) -> bool {
+        let old_pos = self.pos;
+        loop {
+            match self.peek() {
+                Some(ch) => {
+                    if valid.contains_char(ch) {
+                        // consume the character
+                        self.next();
+                    } else {
+                        break;
+                    }
+                },
+                None => break
+            }
+        }
+        old_pos < self.pos
+    }
 }
 
 /// `StateFn` represents the state of the scanner as a function that returns
@@ -203,7 +252,7 @@ struct StateFn(fn(&mut Lexer) -> Option<StateFn>);
 
 /// lex initializes the lexer to lex the given Scheme input text, returning
 /// the channel receiver from which tokens are received.
-fn lex(name: &str, input: &str) -> Receiver<Token> {
+pub fn lex(name: &str, input: &str) -> Receiver<Token> {
     let sanitized = sanitize_input(input);
     let (tx, rx) = mpsc::sync_channel(1);
     let thread_tx = tx.clone();
@@ -262,6 +311,9 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
                 },
                 '"' => {
                     return Some(StateFn(lex_string));
+                },
+                ' ' | '\t' | '\r' | '\n' => {
+                    return Some(StateFn(lex_separator));
                 }
                 _ => return None
             }
@@ -271,8 +323,6 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
             return None;
         }
     }
-    // case ' ', '\t', '\r', '\n':
-    //     return lex_separator
     // case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
     //     // let lex_number sort out what type of number it is
     //     l.backup()
@@ -320,6 +370,15 @@ fn lex_string(l: &mut Lexer) -> Option<StateFn> {
         }
     }
     unreachable!();
+}
+
+/// `lex_separator` expects the current position to be the start of a
+/// separator and advances until it finds the end of that separator.
+/// No token will be emitted since separators are meaningless.
+fn lex_separator(l: &mut Lexer) -> Option<StateFn> {
+    l.accept_run(" \t\n\r");
+    l.ignore();
+    Some(StateFn(lex_start))
 }
 
 #[cfg(test)]
@@ -416,6 +475,14 @@ mod test {
         let mut map = HashMap::new();
         map.insert("\"foo", "unclosed quoted string");
         verify_errors(map);
+    }
+
+    #[test]
+    fn test_ignore_separators() {
+        let mut vec = Vec::new();
+        vec.push(ExpectedResult{typ: TokenType::OpenParen, val: "(".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::CloseParen, val: ")".to_string()});
+        verify_success(" (\n\t )\r\n", vec);
     }
 }
 
