@@ -55,6 +55,7 @@ pub enum TokenType {
 }
 
 impl fmt::Display for TokenType {
+
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             TokenType::Error => write!(f, "Error"),
@@ -117,6 +118,7 @@ struct Lexer<'a> {
 }
 
 impl<'a> fmt::Display for Lexer<'a> {
+
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "TODO: String behavior for Lexer")
     }
@@ -194,9 +196,9 @@ impl<'a> Lexer<'a> {
     }
 }
 
-// StateFn represents the state of the scanner as a function that returns
-// the next state. As a side effect of the function, tokens may be emitted.
-// Cannot use recursive types, as in Go, so must wrap in a struct.
+/// `StateFn` represents the state of the scanner as a function that returns
+/// the next state. As a side effect of the function, tokens may be emitted.
+/// Cannot use recursive types, as in Go, so must wrap in a struct.
 struct StateFn(fn(&mut Lexer) -> Option<StateFn>);
 
 /// lex initializes the lexer to lex the given Scheme input text, returning
@@ -224,6 +226,18 @@ fn lex(name: &str, input: &str) -> Receiver<Token> {
     rx
 }
 
+/// `lex_error` simply returns `None` to signal the end of processing.
+fn lex_error(l: &mut Lexer) -> Option<StateFn> {
+    None
+}
+
+// errorf returns an error token and terminates the scan by passing back
+// a nil pointer that will be the next state.
+fn errorf(l: &mut Lexer, message: String) -> Option<StateFn> {
+    l.emit_text(TokenType::Error, message.as_slice());
+    Some(StateFn(lex_error))
+}
+
 // sanitize_input prepares the input program for lexing, which basically
 // means converting various end-of-line character sequences to a single
 // form, namely newlines.
@@ -246,6 +260,9 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
                     l.emit(TokenType::CloseParen);
                     return Some(StateFn(lex_start));
                 },
+                '"' => {
+                    return Some(StateFn(lex_string));
+                }
                 _ => return None
             }
         },
@@ -262,8 +279,6 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
     //     return lex_number
     // case ';':
     //     return lex_comment
-    // case '"':
-    //     return lex_string
     // case '#':
     //     return lex_hash
     // case '\'', '`', ',':
@@ -278,14 +293,90 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
     unreachable!();
 }
 
+/// `lex_string` expects the current character to be a double-quote and
+/// scans the input to find the end of the quoted string.
+fn lex_string(l: &mut Lexer) -> Option<StateFn> {
+    loop {
+        match l.next() {
+            Some(ch) => {
+                match ch {
+                    // pass over escaped characters
+                    '\\' => {
+                        l.next();
+                        continue;
+                    },
+                    '"' => {
+                        // reached the end of the string
+                        l.emit(TokenType::String);
+                        return Some(StateFn(lex_start));
+                    },
+                    _ => continue
+                }
+            },
+            None => {
+                let start = l.start;
+                return errorf(l, format!("unclosed quoted string starting at {}", start));
+            }
+        }
+    }
+    unreachable!();
+}
+
 #[cfg(test)]
 mod test {
 
     use super::{lex, sanitize_input, TokenType};
+    use std::collections::HashMap;
+    use std::fmt;
+    use std::vec::Vec;
+
+    struct ExpectedResult {
+        typ: TokenType,
+        val: String
+    }
+
+    impl fmt::Display for ExpectedResult {
+
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "ExpectedResult{{typ: {0}, val: {1}}}", self.typ, self.val)
+        }
+    }
+
+    fn verify_success(input: &str, expected: Vec<ExpectedResult>) {
+        let rx = lex("unit", input);
+        for er in expected.iter() {
+            if let Some(token) = rx.recv().ok() {
+                assert_eq!(token.typ, er.typ);
+                assert_eq!(token.val, er.val);
+            } else {
+                assert!(false, "ran out of tokens");
+            }
+        }
+        // make sure we have reached the end of the results
+        if let Some(token) = rx.recv().ok() {
+            assert_eq!(token.typ, TokenType::EndOfFile);
+        } else {
+            assert!(false, "should have exhausted tokens");
+        }
+    }
+
+    /// `verify_errors` checks that the input (map key) produces an error
+    /// containing the substring given as the map value.
+    fn verify_errors(inputs: HashMap<&str, &str>) {
+        for (input, expected) in inputs.iter() {
+            let rx = lex("unit", input);
+            if let Some(token) = rx.recv().ok() {
+                assert_eq!(token.typ, TokenType::Error);
+                assert!(token.val.contains(expected), "expected {} error", expected);
+            } else {
+                assert!(false, "ran out of tokens");
+            }
+        }
+    }
 
     #[test]
     fn test_sanitize_input() {
-        // none, no change
+        // no EOL characters, no change
         assert_eq!(sanitize_input("abc"), "abc");
         // mix of everything
         assert_eq!(sanitize_input("a\r\nb\rc\n"), "a\nb\nc\n");
@@ -299,7 +390,7 @@ mod test {
 
     #[test]
     fn test_empty_input() {
-        let rx = lex("test", "");
+        let rx = lex("unit", "");
         if let Some(token) = rx.recv().ok() {
             assert_eq!(token.typ, TokenType::EndOfFile);
         } else {
@@ -309,27 +400,26 @@ mod test {
 
     #[test]
     fn test_open_close_paren() {
-        let rx = lex("test", "()");
-        if let Some(token) = rx.recv().ok() {
-            assert_eq!(token.typ, TokenType::OpenParen);
-        } else {
-            assert!(false);
-        }
-        if let Some(token) = rx.recv().ok() {
-            assert_eq!(token.typ, TokenType::CloseParen);
-        } else {
-            assert!(false);
-        }
-        if let Some(token) = rx.recv().ok() {
-            assert_eq!(token.typ, TokenType::EndOfFile);
-        } else {
-            assert!(false);
-        }
+        let mut vec = Vec::new();
+        vec.push(ExpectedResult{typ: TokenType::OpenParen, val: "(".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::CloseParen, val: ")".to_string()});
+        verify_success("()", vec);
+    }
+
+    #[test]
+    fn test_quoted_string() {
+        // valid inputs
+        let mut vec = Vec::new();
+        vec.push(ExpectedResult{typ: TokenType::String, val: "\"foo\"".to_string()});
+        verify_success("\"foo\"", vec);
+        // error cases
+        let mut map = HashMap::new();
+        map.insert("\"foo", "unclosed quoted string");
+        verify_errors(map);
     }
 }
 
 // TODO: implement and test lexing a Comment
-// TODO: implement and test lexing a String
 // TODO: implement and test lexing a Quote
 // TODO: implement and test lexing a Character
 // TODO: implement and test lexing a Identifier
