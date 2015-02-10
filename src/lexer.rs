@@ -298,39 +298,36 @@ fn sanitize_input(input: &str) -> String {
 // what to do with that token, returning the appropriate state
 // function.
 fn lex_start(l: &mut Lexer) -> Option<StateFn> {
-    match l.next() {
-        Some(ch) => {
-            match ch {
-                '(' => {
-                    l.emit(TokenType::OpenParen);
-                    return Some(StateFn(lex_start));
-                },
-                ')' => {
-                    l.emit(TokenType::CloseParen);
-                    return Some(StateFn(lex_start));
-                },
-                '"' => {
-                    return Some(StateFn(lex_string));
-                },
-                ' ' | '\t' | '\r' | '\n' => {
-                    return Some(StateFn(lex_separator));
-                },
-                ';' => {
-                    return Some(StateFn(lex_comment));
-                },
-                '#' => {
-                    return Some(StateFn(lex_hash));
-                },
-                '[' | ']' | '{' | '}' => {
-                    return errorf(l, "use of reserved character")
-                }
-                _ => return None
+    if let Some(ch) = l.next() {
+        match ch {
+            '(' => {
+                l.emit(TokenType::OpenParen);
+                return Some(StateFn(lex_start));
+            },
+            ')' => {
+                l.emit(TokenType::CloseParen);
+                return Some(StateFn(lex_start));
+            },
+            '"' => {
+                return Some(StateFn(lex_string));
+            },
+            ' ' | '\t' | '\r' | '\n' => {
+                return Some(StateFn(lex_separator));
+            },
+            ';' => {
+                return Some(StateFn(lex_comment));
+            },
+            '#' => {
+                return Some(StateFn(lex_hash));
+            },
+            '[' | ']' | '{' | '}' => {
+                return errorf(l, "use of reserved character")
             }
-        },
-        None => {
-            l.emit(TokenType::EndOfFile);
-            return None;
+            _ => return None
         }
+    } else {
+        l.emit(TokenType::EndOfFile);
+        return None;
     }
     // case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
     //     // let lex_number sort out what type of number it is
@@ -349,30 +346,23 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
 /// `lex_string` expects the current character to be a double-quote and
 /// scans the input to find the end of the quoted string.
 fn lex_string(l: &mut Lexer) -> Option<StateFn> {
-    loop {
-        match l.next() {
-            Some(ch) => {
-                match ch {
-                    // pass over escaped characters
-                    '\\' => {
-                        l.next();
-                        continue;
-                    },
-                    '"' => {
-                        // reached the end of the string
-                        l.emit(TokenType::String);
-                        return Some(StateFn(lex_start));
-                    },
-                    _ => continue
-                }
+    while let Some(ch) = l.next() {
+        match ch {
+            // pass over escaped characters
+            '\\' => {
+                l.next();
+                continue;
             },
-            None => {
-                let start = l.start;
-                return errorf(l, "unclosed quoted string");
-            }
+            '"' => {
+                // reached the end of the string
+                l.emit(TokenType::String);
+                return Some(StateFn(lex_start));
+            },
+            _ => continue
         }
     }
-    unreachable!();
+    let start = l.start;
+    return errorf(l, "unclosed quoted string");
 }
 
 /// `lex_separator` expects the current position to be the start of a
@@ -388,25 +378,18 @@ fn lex_separator(l: &mut Lexer) -> Option<StateFn> {
 /// comment and advances until it finds the end of the line/file.
 /// No token will be emitted since comments are ignored.
 fn lex_comment(l: &mut Lexer) -> Option<StateFn> {
-    loop {
-        match l.next() {
-            Some(ch) => {
-                match ch {
-                    '\n' | '\r' => {
-                        // whitespace after comment is significant (R7RS 2.2),
-                        // but we ignore whitespace anyway
-                        l.ignore();
-                        return Some(StateFn(lex_start));
-                    },
-                    _ => continue
-                }
-            },
-            None => {
+    while let Some(ch) = l.next() {
+        match ch {
+            '\n' | '\r' => {
+                // whitespace after comment is significant (R7RS 2.2),
+                // but we ignore whitespace anyway
+                l.ignore();
                 return Some(StateFn(lex_start));
-            }
+            },
+            _ => continue
         }
     }
-    unreachable!();
+    return Some(StateFn(lex_start));
 }
 
 /// lex_block_comment expects the current position to be the start of a block
@@ -415,42 +398,35 @@ fn lex_comment(l: &mut Lexer) -> Option<StateFn> {
 /// in R7RS 2.2.
 fn lex_block_comment(l: &mut Lexer) -> Option<StateFn> {
     let mut nesting = 1;
-    loop {
-        match l.next() {
-            Some(ch) => {
-                match ch {
-                    '#' => {
-                        match l.next() {
-                            Some(ch) => {
-                                match ch {
-                                    '|' => nesting += 1,
-                                    _ => continue
-                                }
-                            },
-                            None => break
-                        }
-                    },
-                    '|' => {
-                        match l.next() {
-                            Some(ch) => {
-                                match ch {
-                                    '#' => {
-                                        nesting -= 1;
-                                        if nesting == 0 {
-                                            l.ignore();
-                                            return Some(StateFn(lex_start))
-                                        }
-                                    },
-                                    _ => continue
-                                }
-                            },
-                            None => break
-                        }
-                    },
-                    _ => continue
+    while let Some(ch) = l.next() {
+        match ch {
+            '#' => {
+                if let Some(ch) = l.next() {
+                    match ch {
+                        '|' => nesting += 1,
+                        _ => continue
+                    }
+                } else {
+                    break
                 }
             },
-            None => break
+            '|' => {
+                if let Some(ch) = l.next() {
+                    match ch {
+                        '#' => {
+                            nesting -= 1;
+                            if nesting == 0 {
+                                l.ignore();
+                                return Some(StateFn(lex_start))
+                            }
+                        },
+                        _ => continue
+                    }
+                } else {
+                    break
+                }
+            },
+            _ => continue
         }
     }
     let start = l.start;
@@ -459,14 +435,13 @@ fn lex_block_comment(l: &mut Lexer) -> Option<StateFn> {
 
 /// `lex_hash` processes all of the # tokens.
 fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
-    match l.next() {
-        Some(ch) => {
-            match ch {
-                '|' => return Some(StateFn(lex_block_comment)),
-                _ => return errorf(l, "unrecognized hash value")
-            }
-        },
-        None => return errorf(l, "reached EOF in hash expression")
+    if let Some(ch) = l.next() {
+        match ch {
+            '|' => return Some(StateFn(lex_block_comment)),
+            _ => return errorf(l, "unrecognized hash value")
+        }
+    } else {
+        return errorf(l, "reached EOF in hash expression")
     }
     // case 't', 'f', 'T', 'F':
     //     // allow for #true and #false
