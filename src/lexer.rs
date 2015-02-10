@@ -23,10 +23,8 @@
 //!
 // TODO: write more module documentation explaining how the lexer works
 
-// TODO: should be able to remove these once the code stabilizes
+// TODO: remove once the code matures
 #![allow(dead_code)]
-#![allow(unused_imports)]
-#![allow(unused_variables)]
 
 use std::fmt;
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -124,8 +122,6 @@ impl<'a> fmt::Display for Lexer<'a> {
     }
 }
 
-// TODO: implement Drop trait on lexer object so it can clean up the channel?
-
 impl<'a> Lexer<'a> {
 
     /// `new` constructs an instance of `Lexer` for the named input.
@@ -144,9 +140,6 @@ impl<'a> Lexer<'a> {
     }
 
     // TODO: copy backup() and rewind() basically as-is from lexer.go
-    // TODO: --> use StrExt.char_range_at() and StrExt.char_range_at_reverse()
-    // TODO: --> replace utf8.DecodeRuneInString() to StrExt.char_range_at()
-    // TODO: --> replace utf8.DecodeLastRuneInString() with StrExt.char_range_at_reverse()
     // TODO: --> replace utf8.RuneCountInString() with StrExt.chars().count()
 
     /// emit passes the current token back to the client via the channel.
@@ -276,7 +269,7 @@ pub fn lex(name: &str, input: &str) -> Receiver<Token> {
 }
 
 /// `lex_error` simply returns `None` to signal the end of processing.
-fn lex_error(l: &mut Lexer) -> Option<StateFn> {
+fn lex_error(_l: &mut Lexer) -> Option<StateFn> {
     None
 }
 
@@ -321,7 +314,10 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
                 return Some(StateFn(lex_hash));
             },
             '[' | ']' | '{' | '}' => {
-                return errorf(l, "use of reserved character")
+                return errorf(l, "use of reserved character");
+            },
+            '\'' | '`' | ',' => {
+                return Some(StateFn(lex_quote));
             }
             _ => return None
         }
@@ -333,8 +329,6 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
     //     // let lex_number sort out what type of number it is
     //     l.backup()
     //     return lex_number
-    // case '\'', '`', ',':
-    //     return lex_quote
     // default:
     //     // let lex_identifier sort out what exactly this is
     //     l.backup()
@@ -361,7 +355,6 @@ fn lex_string(l: &mut Lexer) -> Option<StateFn> {
             _ => continue
         }
     }
-    let start = l.start;
     return errorf(l, "unclosed quoted string");
 }
 
@@ -429,7 +422,6 @@ fn lex_block_comment(l: &mut Lexer) -> Option<StateFn> {
             _ => continue
         }
     }
-    let start = l.start;
     return errorf(l, "unclosed block comment");
 }
 
@@ -542,6 +534,24 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
     //     l.ignore()
     //     return lexStart
     unreachable!();
+}
+
+/// `lex_quote` processes the special quoting characters.
+fn lex_quote(l: &mut Lexer) -> Option<StateFn> {
+    // we already know it's one of the quoting characters, just need
+    // to check if it is the two character ,@ form
+    let prev = l.input.char_range_at_reverse(l.pos);
+    if prev.ch == ',' {
+        if let Some(ch) = l.peek() {
+            if ch == '@' {
+                l.next();
+            }
+        } else {
+            return errorf(l, "reached EOF in quote expression")
+        }
+    }
+    l.emit(TokenType::Quote);
+    Some(StateFn(lex_start))
 }
 
 #[cfg(test)]
@@ -673,10 +683,22 @@ mod test {
         vec.push(ExpectedResult{typ: TokenType::CloseParen, val: ")".to_string()});
         verify_success("#| outer #| nested |# outer |# ( #| bar |# )", vec);
     }
+
+    #[test]
+    fn test_quotes() {
+        let mut vec = Vec::new();
+        vec.push(ExpectedResult{typ: TokenType::Quote, val: ",".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Quote, val: ",@".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Quote, val: "'".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Quote, val: "`".to_string()});
+        verify_success(", ,@ ' `", vec);
+        let mut map = HashMap::new();
+        map.insert(",", "reached EOF in quote expression");
+        verify_errors(map);
+    }
 }
 
 // TODO: implement and test lexing a Comment
-// TODO: implement and test lexing a Quote
 // TODO: implement and test lexing a Character
 // TODO: implement and test lexing a Identifier
 // TODO: implement and test lexing a Integer
