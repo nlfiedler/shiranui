@@ -455,23 +455,68 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
                 l.emit(TokenType::Boolean);
                 return Some(StateFn(lex_start));
             },
+            '(' => {
+                l.emit(TokenType::Vector);
+                return Some(StateFn(lex_start));
+            },
+            ';' => {
+                // line comment, with optional space; parser does the real work
+                l.accept(" ");
+                l.emit(TokenType::Comment);
+                return Some(StateFn(lex_start));
+            },
+            'u' => {
+                // byte vector support (e.g. #u8(...))
+                if let Some(ch) = l.next() {
+                    if ch == '8' {
+                        if let Some(ch) = l.next() {
+                            if ch == '(' {
+                                l.emit(TokenType::ByteVector);
+                                return Some(StateFn(lex_start));
+                            }
+                        }
+                    }
+                    return errorf(l, "invalid byte vector expression");
+                }
+                return errorf(l, "reached EOF in byte vector expression");
+            },
+            '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' => {
+                l.accept_run("0123456789");
+                if let Some(ch) = l.next() {
+                    if ch == '#' {
+                        l.emit(TokenType::LabelReference);
+                    } else if ch == '=' {
+                        l.emit(TokenType::LabelDefinition);
+                    } else {
+                        return errorf(l, "invalid label expression")
+                    }
+                } else {
+                    return errorf(l, "reached EOF in label expression")
+                }
+                return Some(StateFn(lex_start));
+            },
+            '!' => {
+                // handle #!fold-case and #!no-fold-case directives (R7RS 2.1)
+                l.accept_run("no-fldcase");
+                if l.token_matches("#!fold-case") {
+                    l.folding = true;
+                } else if l.token_matches("#!no-fold-case") {
+                    l.folding = false;
+                } else {
+                    return errorf(l, "invalid Scheme directive");
+                }
+                l.ignore();
+                return Some(StateFn(lex_start));
+            }
             _ => return errorf(l, "unrecognized hash value")
         }
     } else {
         return errorf(l, "reached EOF in hash expression")
     }
-    // case '(':
-    //     l.emit(tokenVector)
-    //     return lexStart
     // case 'b', 'd', 'e', 'i', 'o', 'x':
     //     // let lexNumber sort out the prefix
     //     l.rewind()
     //     return lexNumber
-    // case ';':
-    //     // line comment, with optional space; parser does the real work
-    //     l.accept(" ")
-    //     l.emit(tokenComment)
-    //     return lexStart
     // case '\\':
     //     // check for one of the many special character names
     //     if l.folding {
@@ -516,38 +561,6 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
     //         }
     //         l.emit(tokenCharacter)
     //     }
-    //     return lexStart
-    // case 'u':
-    //     // byte vector support (e.g. #u8(...))
-    //     if r := l.next(); r == '8' {
-    //         if r := l.next(); r == '(' {
-    //             l.emit(tokenByteVector)
-    //             return lexStart
-    //         }
-    //     }
-    //     return l.errorf("unrecognized hash value: %q", l.input[l.start:l.pos])
-    // case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-    //     l.acceptRun("0123456789")
-    //     if r := l.next(); r == '#' {
-    //         l.emit(tokenLabelReference)
-    //     } else if r == '=' {
-    //         l.emit(tokenLabelDefinition)
-    //     } else {
-    //         return l.errorf("unrecognized hash value: %q", l.input[l.start:l.pos])
-    //     }
-    //     return lexStart
-    // case '!':
-    //     // handle #!fold-case and #!no-fold-case directives (R7RS 2.1)
-    //     l.acceptRun("no-fldcase")
-    //     sym := l.input[l.start+2 : l.pos]
-    //     if sym == "fold-case" {
-    //         l.folding = true
-    //     } else if sym == "no-fold-case" {
-    //         l.folding = false
-    //     } else {
-    //         return l.errorf("invalid directive: %q", l.input[l.start:l.pos])
-    //     }
-    //     l.ignore()
     //     return lexStart
     unreachable!();
 }
@@ -728,17 +741,74 @@ mod test {
         map.insert("#fawlse", "invalid boolean literal");
         verify_errors(map);
     }
+
+    #[test]
+    fn test_vectors() {
+        let mut vec = Vec::new();
+        vec.push(ExpectedResult{typ: TokenType::Vector, val: "#(".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#t".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#f".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::CloseParen, val: ")".to_string()});
+        verify_success("#(#t #f)", vec);
+    }
+
+    #[test]
+    fn test_byte_vectors() {
+        let mut vec = Vec::new();
+        vec.push(ExpectedResult{typ: TokenType::ByteVector, val: "#u8(".to_string()});
+        // TODO: replace test data with numbers so this at least appears valid
+        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#t".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#f".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::CloseParen, val: ")".to_string()});
+        verify_success("#u8(#t #f)", vec);
+    }
+
+    #[test]
+    fn test_comments() {
+        let mut vec = Vec::new();
+        vec.push(ExpectedResult{typ: TokenType::Comment, val: "#; ".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#t".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Comment, val: "#;".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#f".to_string()});
+        verify_success("#; #t #;#f", vec);
+    }
+
+    #[test]
+    fn test_labels() {
+        let mut vec = Vec::new();
+        vec.push(ExpectedResult{typ: TokenType::LabelDefinition, val: "#1=".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#t".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::LabelReference, val: "#1#".to_string()});
+        verify_success("#1=#t #1#", vec);
+        let mut map = HashMap::new();
+        map.insert("#1+", "invalid label expression");
+        map.insert("#1", "reached EOF in label expression");
+        verify_errors(map);
+    }
+
+    // #[test]
+    // TODO: enable once tokens are supported
+    // fn test_foldcase() {
+    //     let input = r#"#!fold-case lAMbdA
+    //     #!no-fold-case
+    //     lAMbdA
+    //     #!fold-case
+    //     LAMBDA
+    //     #!no-fold-case
+    //     lamBDA"#;
+    //     let mut vec = Vec::new();
+    //     vec.push(ExpectedResult{typ: TokenType::Identifier, val: "lambda".to_string()});
+    //     vec.push(ExpectedResult{typ: TokenType::Identifier, val: "lAMbdA".to_string()});
+    //     vec.push(ExpectedResult{typ: TokenType::Identifier, val: "lambda".to_string()});
+    //     vec.push(ExpectedResult{typ: TokenType::Identifier, val: "lamBDA".to_string()});
+    //     verify_success(input, vec);
+    // }
 }
 
-// TODO: implement and test lexing a Comment
 // TODO: implement and test lexing a Character
 // TODO: implement and test lexing a Identifier
 // TODO: implement and test lexing a Integer
 // TODO: implement and test lexing a Float
 // TODO: implement and test lexing a Complex
 // TODO: implement and test lexing a Rational
-// TODO: implement and test lexing a Vector
-// TODO: implement and test lexing a ByteVector
-// TODO: implement and test lexing a LabelDefinition
-// TODO: implement and test lexing a LabelReference
 // TODO: port over the tests from lexer_test.go in bakeneko
