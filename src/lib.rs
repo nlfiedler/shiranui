@@ -20,3 +20,4 @@
 #![feature(std_misc)]
 
 pub mod lexer;
+pub mod sequence;

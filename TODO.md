@@ -8,6 +8,7 @@
 ## High Level
 
 * Lexer
+* Terms and Sequences
 * Parser
 * Basic interpreter
 * Byte code compiler
@@ -21,10 +22,6 @@
 
 * Find out what `Fn` and `FnMut` are about
     * Appear in `std::ops`
-* Try to use the `char` type and it's helpful functions (e.g. `is_whitespace()`)
-* I like the `is_*` functions for checking if a character is whitespace, etc
-    * Look at the those in `lexer.rs` in r6.rs project
-* I like the fancy pattern matching that oxischeme uses in `read.rs`
 * Complex number support in Rust?
     * Nope, but there is a crate that provides complex, bigint, and rational...
     * https://crates.io/crates/num
@@ -36,13 +33,6 @@
 * Use `static` to declare the unchanging singleton objects (e.g. `theVoid`, `theEmptyList`)
     * But not the mutable evironment vars, such as `theNullEnvironment`
         * Unlikely that rustc would consider them immutable in this case
-* Think hard about changing `Pair` to use something other than `interface{}`
-    * Need a base type for all Scheme terms
-    * Maybe `Pair` has additional fields to indicate the null-ness of car and cdr
-        * e.g. a `bool` field named `null_cdr` that indicates that cdr is the empty list
-        * meanwhile, the `cdr` field would hold the actual empty list value, `theEmptyList`
-        * increases the size of the `Pair` struct, but makes the code a lot simpler
-        * or maybe not, and we just compare `cdr` to `theEmptyList` using `==` or `match`
 * Is there something like `defer` for Rust?
     * Implement the `Drop` trait for such resources in order to clean up
     * In addition, there is the `Finally` trait in `std::finally`
