@@ -141,6 +141,10 @@ impl<'a> Lexer<'a> {
 
     // TODO: copy backup() and rewind() basically as-is from lexer.go
     // TODO: --> replace utf8.RuneCountInString() with StrExt.chars().count()
+    // TODO: Try to use the `char` type and it's helpful functions (e.g. `is_whitespace()`)
+    // TODO: I like the `is_*` functions for checking if a character is whitespace, etc
+    // TODO: Look at the those in `lexer.rs` in r6.rs project
+    // TODO: I like the fancy pattern matching that oxischeme uses in `read.rs`
 
     /// emit passes the current token back to the client via the channel.
     fn emit(&mut self, t: TokenType) {
@@ -164,6 +168,18 @@ impl<'a> Lexer<'a> {
             col: self.col
         });
         self.start = self.pos
+    }
+
+    /// `token_length` returns the length of the current token.
+    fn token_length(&mut self) -> usize {
+        self.pos - self.start
+    }
+
+    /// `token_matches` returns true if the current token matches the given
+    /// text exactly (case-sensitive), and false otherwise.
+    fn token_matches(&mut self, query: &str) -> bool {
+        let text = self.input.as_slice().slice(self.start, self.pos);
+        text == query
     }
 
     /// `next` returns the next rune in the input, or `None` if at the end.
@@ -430,20 +446,20 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
     if let Some(ch) = l.next() {
         match ch {
             '|' => return Some(StateFn(lex_block_comment)),
+            't' | 'f' | 'T' | 'F' => {
+                // allow for #true and #false
+                l.accept_run("aelrsu");
+                if l.token_length() > 2 && !l.token_matches("#true") && !l.token_matches("#false") {
+                    return errorf(l, "invalid boolean literal");
+                }
+                l.emit(TokenType::Boolean);
+                return Some(StateFn(lex_start));
+            },
             _ => return errorf(l, "unrecognized hash value")
         }
     } else {
         return errorf(l, "reached EOF in hash expression")
     }
-    // case 't', 'f', 'T', 'F':
-    //     // allow for #true and #false
-    //     l.acceptRun("aelrsu")
-    //     sym := l.input[l.start+1 : l.pos]
-    //     if len(sym) > 1 && sym != "true" && sym != "false" {
-    //         return l.errorf("invalid boolean: %q", l.input[l.start:l.pos])
-    //     }
-    //     l.emit(tokenBoolean)
-    //     return lexStart
     // case '(':
     //     l.emit(tokenVector)
     //     return lexStart
@@ -696,6 +712,22 @@ mod test {
         map.insert(",", "reached EOF in quote expression");
         verify_errors(map);
     }
+
+    #[test]
+    fn test_booleans() {
+        let mut vec = Vec::new();
+        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#t".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#T".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#true".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#f".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#F".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#false".to_string()});
+        verify_success("#t #T #true #f #F #false", vec);
+        let mut map = HashMap::new();
+        map.insert("#tree", "invalid boolean literal");
+        map.insert("#fawlse", "invalid boolean literal");
+        verify_errors(map);
+    }
 }
 
 // TODO: implement and test lexing a Comment
@@ -705,7 +737,6 @@ mod test {
 // TODO: implement and test lexing a Float
 // TODO: implement and test lexing a Complex
 // TODO: implement and test lexing a Rational
-// TODO: implement and test lexing a Boolean
 // TODO: implement and test lexing a Vector
 // TODO: implement and test lexing a ByteVector
 // TODO: implement and test lexing a LabelDefinition
