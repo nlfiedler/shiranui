@@ -828,23 +828,23 @@ mod test {
         verify_errors(map);
     }
 
-    // #[test]
-    // TODO: enable once identifiers are supported
-    // fn test_foldcase() {
-    //     let input = r#"#!fold-case lAMbdA
-    //     #!no-fold-case
-    //     lAMbdA
-    //     #!fold-case
-    //     LAMBDA
-    //     #!no-fold-case
-    //     lamBDA"#;
-    //     let mut vec = Vec::new();
-    //     vec.push(ExpectedResult{typ: TokenType::Identifier, val: "lambda".to_string()});
-    //     vec.push(ExpectedResult{typ: TokenType::Identifier, val: "lAMbdA".to_string()});
-    //     vec.push(ExpectedResult{typ: TokenType::Identifier, val: "lambda".to_string()});
-    //     vec.push(ExpectedResult{typ: TokenType::Identifier, val: "lamBDA".to_string()});
-    //     verify_success(input, vec);
-    // }
+    #[test]
+    fn test_foldcase() {
+        let input = r#"#!fold-case #\newLIne
+        #!no-fold-case
+        #\newline
+        #!fold-case
+        #\NEWLINE
+        #!no-fold-case
+        #\newline"#;
+        // TODO: add identifiers as well, once lex_identifier is ready
+        let mut vec = Vec::new();
+        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\n".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\n".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\n".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\n".to_string()});
+        verify_success(input, vec);
+    }
 }
 
 // TODO: implement and test lexing a Identifier
