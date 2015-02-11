@@ -18,6 +18,7 @@
 #![feature(collections)]
 #![feature(core)]
 #![feature(std_misc)]
+#![feature(unicode)]
 
 pub mod lexer;
 pub mod sequence;

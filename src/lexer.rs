@@ -177,9 +177,14 @@ impl<'a> Lexer<'a> {
 
     /// `token_matches` returns true if the current token matches the given
     /// text exactly (case-sensitive), and false otherwise.
-    fn token_matches(&mut self, query: &str) -> bool {
+    fn token_matches(&mut self, query: &str, folding: bool) -> bool {
         let text = self.input.as_slice().slice(self.start, self.pos);
-        text == query
+        if folding {
+            let lower_text = fold_case(text);
+            lower_text.as_slice() == query
+        } else {
+            text == query
+        }
     }
 
     /// `next` returns the next rune in the input, or `None` if at the end.
@@ -301,6 +306,11 @@ fn errorf(l: &mut Lexer, message: &str) -> Option<StateFn> {
 // form, namely newlines.
 fn sanitize_input(input: &str) -> String {
     input.replace("\r\n", "\n").replace("\r", "\n")
+}
+
+/// `fold_case` converts the given `str` to all lowercase.
+fn fold_case(s: &str) -> String {
+    s.chars().map(|c| c.to_lowercase()).collect::<String>()
 }
 
 // lex_start reads the next token from the input and determines
@@ -446,10 +456,12 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
     if let Some(ch) = l.next() {
         match ch {
             '|' => return Some(StateFn(lex_block_comment)),
-            't' | 'f' | 'T' | 'F' => {
+            't' | 'f' => {
                 // allow for #true and #false
                 l.accept_run("aelrsu");
-                if l.token_length() > 2 && !l.token_matches("#true") && !l.token_matches("#false") {
+                if l.token_length() > 2 &&
+                        !l.token_matches("#true", false) &&
+                        !l.token_matches("#false", false) {
                     return errorf(l, "invalid boolean literal");
                 }
                 l.emit(TokenType::Boolean);
@@ -497,16 +509,19 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
             '!' => {
                 // handle #!fold-case and #!no-fold-case directives (R7RS 2.1)
                 l.accept_run("no-fldcase");
-                if l.token_matches("#!fold-case") {
+                if l.token_matches("#!fold-case", false) {
                     l.folding = true;
-                } else if l.token_matches("#!no-fold-case") {
+                } else if l.token_matches("#!no-fold-case", false) {
                     l.folding = false;
                 } else {
                     return errorf(l, "invalid Scheme directive");
                 }
                 l.ignore();
                 return Some(StateFn(lex_start));
-            }
+            },
+            '\\' => {
+                return Some(StateFn(lex_character));
+            },
             _ => return errorf(l, "unrecognized hash value")
         }
     } else {
@@ -516,52 +531,51 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
     //     // let lexNumber sort out the prefix
     //     l.rewind()
     //     return lexNumber
-    // case '\\':
-    //     // check for one of the many special character names
-    //     if l.folding {
-    //         l.acceptRun("abcdeiklmnoprstuwABCDEIKLMNOPRSTUW")
-    //     } else {
-    //         l.acceptRun("abcdeiklmnoprstuw")
-    //     }
-    //     sym := l.input[l.start+2 : l.pos]
-    //     if l.folding {
-    //         sym = strings.ToLower(sym)
-    //     }
-    //     if sym == "newline" {
-    //         l.emitText(tokenCharacter, "#\\\n")
-    //     } else if sym == "space" {
-    //         l.emitText(tokenCharacter, "#\\ ")
-    //     } else if sym == "alarm" {
-    //         l.emitText(tokenCharacter, "#\\\a")
-    //     } else if sym == "backspace" {
-    //         l.emitText(tokenCharacter, "#\\\b")
-    //     } else if sym == "delete" {
-    //         l.emitText(tokenCharacter, "#\\\u007f")
-    //     } else if sym == "escape" {
-    //         l.emitText(tokenCharacter, "#\\\u001b")
-    //     } else if sym == "null" {
-    //         l.emitText(tokenCharacter, "#\\\u0000")
-    //     } else if sym == "return" {
-    //         l.emitText(tokenCharacter, "#\\\r")
-    //     } else if sym == "tab" {
-    //         l.emitText(tokenCharacter, "#\\\t")
-    //     } else {
-    //         // go back to #, consume #\...
-    //         l.rewind()
-    //         l.next()
-    //         l.next()
-    //         // ...and assert that it is a single character
-    //         if !unicode.IsLetter(l.next()) {
-    //             return l.errorf("malformed character escape: %q", l.input[l.start:l.pos])
-    //         }
-    //         if isAlphaNumeric(l.peek()) {
-    //             l.next()
-    //             return l.errorf("malformed character escape: %q", l.input[l.start:l.pos])
-    //         }
-    //         l.emit(tokenCharacter)
-    //     }
-    //     return lexStart
     unreachable!();
+}
+
+/// `lex_character` processes a character literal.
+fn lex_character(l: &mut Lexer) -> Option<StateFn> {
+    // check for one of the many special character names
+    if l.folding {
+        l.accept_run("abcdeiklmnoprstuwABCDEIKLMNOPRSTUW");
+    } else {
+        l.accept_run("abcdeiklmnoprstuw");
+    }
+    let folding = l.folding;
+    if l.token_matches("#\\newline", folding) {
+        l.emit_text(TokenType::Character, "#\\\n");
+    } else if l.token_matches("#\\space", folding) {
+        l.emit_text(TokenType::Character, "#\\ ");
+    } else if l.token_matches("#\\alarm", folding) {
+        l.emit_text(TokenType::Character, "#\\\x07");
+    } else if l.token_matches("#\\backspace", folding) {
+        l.emit_text(TokenType::Character, "#\\\x08");
+    } else if l.token_matches("#\\delete", folding) {
+        l.emit_text(TokenType::Character, "#\\\x7f");
+    } else if l.token_matches("#\\escape", folding) {
+        l.emit_text(TokenType::Character, "#\\\x1b");
+    } else if l.token_matches("#\\null", folding) {
+        l.emit_text(TokenType::Character, "#\\\0");
+    } else if l.token_matches("#\\return", folding) {
+        l.emit_text(TokenType::Character, "#\\\r");
+    } else if l.token_matches("#\\tab", folding) {
+        l.emit_text(TokenType::Character, "#\\\t");
+    } else {
+        // assert that it is a single character (e.g. #\a)
+        let prev = l.input.char_range_at_reverse(l.pos);
+        if !prev.ch.is_alphabetic() || l.token_length() > 3 {
+            return errorf(l, "invalid character literal");
+        }
+        if let Some(ch) = l.peek() {
+            if ch.is_alphabetic() {
+                l.next();
+                return errorf(l, "invalid character literal")
+            }
+        }
+        l.emit(TokenType::Character);
+    }
+    Some(StateFn(lex_start))
 }
 
 /// `lex_quote` processes the special quoting characters.
@@ -585,7 +599,7 @@ fn lex_quote(l: &mut Lexer) -> Option<StateFn> {
 #[cfg(test)]
 mod test {
 
-    use super::{lex, sanitize_input, TokenType};
+    use super::{lex, sanitize_input, fold_case, TokenType};
     use std::collections::HashMap;
     use std::fmt;
     use std::vec::Vec;
@@ -646,6 +660,14 @@ mod test {
         assert_eq!(sanitize_input("a\rb\rc\r"), "a\nb\nc\n");
         // Unix style, no change
         assert_eq!(sanitize_input("a\nb\nc\n"), "a\nb\nc\n");
+    }
+
+    #[test]
+    fn test_fold_case() {
+        assert_eq!(fold_case("abc"), "abc");
+        assert_eq!(fold_case("ABC"), "abc");
+        assert_eq!(fold_case("aBc"), "abc");
+        assert_eq!(fold_case("AbC"), "abc");
     }
 
     #[test]
@@ -729,15 +751,13 @@ mod test {
     fn test_booleans() {
         let mut vec = Vec::new();
         vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#t".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#T".to_string()});
         vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#true".to_string()});
         vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#f".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#F".to_string()});
         vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#false".to_string()});
-        verify_success("#t #T #true #f #F #false", vec);
+        verify_success("#t #true #f #false", vec);
         let mut map = HashMap::new();
         map.insert("#tree", "invalid boolean literal");
-        map.insert("#fawlse", "invalid boolean literal");
+        map.insert("#fawls", "invalid boolean literal");
         verify_errors(map);
     }
 
@@ -785,8 +805,31 @@ mod test {
         verify_errors(map);
     }
 
+    #[test]
+    fn test_characters() {
+        let input = r#"#\a #\space #\newline #\t
+        #\alarm #\backspace #\delete #\escape #\null #\return #\tab"#;
+        let mut vec = Vec::new();
+        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\a".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\ ".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\n".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\t".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\x07".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\x08".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\x7f".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\x1b".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\0".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\r".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\t".to_string()});
+        verify_success(input, vec);
+        let mut map = HashMap::new();
+        map.insert("#\\foo", "invalid character literal");
+        map.insert("#\\1", "invalid character literal");
+        verify_errors(map);
+    }
+
     // #[test]
-    // TODO: enable once tokens are supported
+    // TODO: enable once identifiers are supported
     // fn test_foldcase() {
     //     let input = r#"#!fold-case lAMbdA
     //     #!no-fold-case
@@ -804,7 +847,6 @@ mod test {
     // }
 }
 
-// TODO: implement and test lexing a Character
 // TODO: implement and test lexing a Identifier
 // TODO: implement and test lexing a Integer
 // TODO: implement and test lexing a Float
