@@ -460,8 +460,7 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
                 return Some(StateFn(lex_start));
             },
             ';' => {
-                // line comment, with optional space; parser does the real work
-                l.accept(" ");
+                // emit line comment; parser does the real work
                 l.emit(TokenType::Comment);
                 return Some(StateFn(lex_start));
             },
@@ -766,11 +765,11 @@ mod test {
     #[test]
     fn test_comments() {
         let mut vec = Vec::new();
-        vec.push(ExpectedResult{typ: TokenType::Comment, val: "#; ".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Comment, val: "#;".to_string()});
         vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#t".to_string()});
         vec.push(ExpectedResult{typ: TokenType::Comment, val: "#;".to_string()});
         vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#f".to_string()});
-        verify_success("#; #t #;#f", vec);
+        verify_success("#;  #t #;#f", vec);
     }
 
     #[test]
