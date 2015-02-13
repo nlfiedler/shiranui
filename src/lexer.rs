@@ -26,6 +26,9 @@
 // TODO: remove once the code matures
 #![allow(dead_code)]
 
+// TODO: remove once the slice vs [..] warnings settle down
+#![allow(deprecated)]
+
 use std::fmt;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
@@ -139,13 +142,6 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    // TODO: copy backup() and rewind() basically as-is from lexer.go
-    // TODO: --> replace utf8.RuneCountInString() with StrExt.chars().count()
-    // TODO: Try to use the `char` type and it's helpful functions (e.g. `is_whitespace()`)
-    // TODO: I like the `is_*` functions for checking if a character is whitespace, etc
-    // TODO: Look at the those in `lexer.rs` in r6.rs project
-    // TODO: I like the fancy pattern matching that oxischeme uses in `read.rs`
-
     /// emit passes the current token back to the client via the channel.
     fn emit(&mut self, t: TokenType) {
         let text = self.input.as_slice().slice(self.start, self.pos);
@@ -224,6 +220,51 @@ impl<'a> Lexer<'a> {
         self.start = self.pos;
     }
 
+    /// `backup` steps back one rune. Can be called only once per call to next.
+    fn backup(&mut self) {
+        // if width is zero, next() reached eof, don't adjust anything this time
+        if self.width > 0 {
+            self.pos -= self.width;
+            if self.input.char_at(self.pos) == '\n' {
+                // move row/col to end of previously scanned line
+                self.row -= 1;
+                self.compute_column();
+            } else {
+                self.col -= self.width;
+            }
+        }
+        let prev = self.input.char_range_at_reverse(self.pos);
+        self.width = self.pos - prev.next;
+    }
+
+    /// `rewind` moves the current position back to the start of the current token.
+    fn rewind(&mut self) {
+        while self.pos > self.start {
+            let prev = self.input.char_range_at_reverse(self.pos);
+            self.pos = prev.next;
+            if prev.ch == '\n' {
+                self.row -= 1;
+            }
+        }
+        self.compute_column();
+        let pc = self.input.char_range_at_reverse(self.pos);
+        self.width = self.pos - pc.next;
+    }
+
+    /// `compute_column` updates the `col` field to the correct value after
+    /// having moved the `pos` to its new position within the `input` text.
+    fn compute_column(&mut self) {
+        let prior = self.input.slice_to(self.pos);
+        // assume there is no newline within this slice
+        let mut nl = 0;
+        if let Some(pos) = prior.rfind('\n') {
+            // don't count the newline itself
+            nl = pos + 1;
+        }
+        let subset = self.input.slice(nl, self.pos);
+        self.col = subset.chars().count();
+    }
+
     /// `accept` consumes the next rune if it's from the valid set.
     fn accept(&mut self, valid: &str) -> bool {
         match self.peek() {
@@ -289,21 +330,15 @@ pub fn lex(name: &str, input: &str) -> Receiver<Token> {
     rx
 }
 
-/// `lex_error` simply returns `None` to signal the end of processing.
-fn lex_error(_l: &mut Lexer) -> Option<StateFn> {
+/// `errorf` emits an error token and returns `None` to end lexing.
+fn errorf(l: &mut Lexer, message: &str) -> Option<StateFn> {
+    l.emit_text(TokenType::Error, message);
     None
 }
 
-// errorf returns an error token and terminates the scan by passing back
-// a nil pointer that will be the next state.
-fn errorf(l: &mut Lexer, message: &str) -> Option<StateFn> {
-    l.emit_text(TokenType::Error, message);
-    Some(StateFn(lex_error))
-}
-
-// sanitize_input prepares the input program for lexing, which basically
-// means converting various end-of-line character sequences to a single
-// form, namely newlines.
+/// `sanitize_input` prepares the input program for lexing, which basically
+/// means converting various end-of-line character sequences to a single
+/// form, namely newlines.
 fn sanitize_input(input: &str) -> String {
     input.replace("\r\n", "\n").replace("\r", "\n")
 }
@@ -313,9 +348,8 @@ fn fold_case(s: &str) -> String {
     s.chars().map(|c| c.to_lowercase()).collect::<String>()
 }
 
-// lex_start reads the next token from the input and determines
-// what to do with that token, returning the appropriate state
-// function.
+/// `lex_start` reads the next token from the input and determines what
+/// to do with that token, returning the appropriate state function.
 fn lex_start(l: &mut Lexer) -> Option<StateFn> {
     if let Some(ch) = l.next() {
         match ch {
@@ -344,17 +378,18 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
             },
             '\'' | '`' | ',' => {
                 return Some(StateFn(lex_quote));
-            }
+            },
+            '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' => {
+                // let lex_number sort out what type of number it is
+                l.backup();
+                return Some(StateFn(lex_number));
+            },
             _ => return None
         }
     } else {
         l.emit(TokenType::EndOfFile);
         return None;
     }
-    // case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-    //     // let lex_number sort out what type of number it is
-    //     l.backup()
-    //     return lex_number
     // default:
     //     // let lex_identifier sort out what exactly this is
     //     l.backup()
@@ -522,15 +557,16 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
             '\\' => {
                 return Some(StateFn(lex_character));
             },
+            'b' | 'd' | 'e' | 'i' | 'o' | 'x' => {
+                // let lexNumber sort out the prefix
+                l.rewind();
+                return Some(StateFn(lex_number));
+            },
             _ => return errorf(l, "unrecognized hash value")
         }
     } else {
         return errorf(l, "reached EOF in hash expression")
     }
-    // case 'b', 'd', 'e', 'i', 'o', 'x':
-    //     // let lexNumber sort out the prefix
-    //     l.rewind()
-    //     return lexNumber
     unreachable!();
 }
 
@@ -593,6 +629,180 @@ fn lex_quote(l: &mut Lexer) -> Option<StateFn> {
         }
     }
     l.emit(TokenType::Quote);
+    Some(StateFn(lex_start))
+}
+
+/// `NumberLexer` is used to lexically analyze a numeric literal.
+struct NumberLexer {
+    is_float: bool,
+    is_complex: bool,
+    is_rational: bool,
+    is_exact: bool,
+    digits: String
+}
+
+impl NumberLexer {
+
+    /// `new` constructs a new instance of NumberLexer.
+    fn new() -> NumberLexer {
+        NumberLexer {
+            is_float: false,
+            is_complex: false,
+            is_rational: false,
+            is_exact: true,
+            digits: "0123456789".to_string()
+        }
+    }
+
+    /// `accept_prefix_r` attempts to read the prefix to a numeric literal.
+    fn accept_prefix_r(&mut self, l: &mut Lexer) -> Result<u8, &'static str> {
+        // we expect either exactness, radix, or both, in any order;
+        // however, if we see more than one of either, that's an error
+        let mut base_set = 0;
+        let mut exactness_set = 0;
+        while l.accept("#") {
+            if let Some(ch) = l.next() {
+                match ch {
+                    'd' | 'D' => {
+                        base_set += 1;
+                    },
+                    'b' | 'B' => {
+                        base_set += 1;
+                        self.digits = "01".to_string();
+                    },
+                    'o' | 'O' => {
+                        base_set += 1;
+                        self.digits = "01234567".to_string();
+                    },
+                    'x' | 'X' => {
+                        base_set += 1;
+                        self.digits = "0123456789abcdefABCDEF".to_string();
+                    },
+                    'e' | 'E' => {
+                        exactness_set += 1;
+                    },
+                    'i' | 'I' => {
+                        exactness_set += 1;
+                    },
+                    _ => {
+                        // unrecognized letter, signal an error
+                        base_set = 10;
+                    }
+                }
+            }
+        }
+        if base_set > 1 || exactness_set > 1 {
+            return Err("malformed number prefix");
+        }
+        Ok(0)
+    }
+
+    /// `accept_integer_r` attempts to read an integer, possibly inexact.
+    fn accept_integer_r(&mut self, l: &mut Lexer, tentative: bool) -> Result<u8, &'static str> {
+        let ok = l.accept_run(self.digits.as_slice());
+        if !tentative && !ok {
+            return Err("malformed unsigned integer");
+        }
+        if l.accept_run("#") {
+            self.is_exact = false;
+        }
+        Ok(0)
+    }
+
+    /// `accept_ureal_r` attempts to read an unsigned real number, possibly inexact.
+    fn accept_ureal_r(&mut self, l: &mut Lexer, tentative: bool) -> Result<u8, &'static str> {
+        let pos = l.pos;
+        let int_result_1 = self.accept_integer_r(l, tentative);
+        if int_result_1.is_err() {
+            return int_result_1;
+        }
+        if l.accept("/") {
+            if (l.pos - pos) == 1 {
+                // there has to be something before the /
+                return Err("malformed rational");
+            }
+            self.is_rational = true;
+            let int_result_2 = self.accept_integer_r(l, false);
+            if int_result_2.is_err() {
+                return int_result_2;
+            }
+        } else if self.digits.len() == 10 && l.accept(".") {
+            self.is_float = true;
+            if self.is_exact {
+                l.accept_run(self.digits.as_slice());
+            } else {
+                l.accept_run("#");
+            }
+        }
+        if l.accept("dDeEfFlLsS") {
+            self.is_float = true;
+            l.accept("+-");
+            l.accept_run(self.digits.as_slice());
+        }
+        Ok(0)
+    }
+
+    /// `accept_real_r` attempts to read an optionally signed real number.
+    fn accept_real_r(&mut self, l: &mut Lexer, tentative: bool) -> Result<u8, &'static str> {
+        l.accept("+-");
+        self.accept_ureal_r(l, tentative)
+    }
+}
+
+/// `lex_number` expects the current position to be the start of a numeric
+/// literal, and advances to the end of the literal. It will parse both
+/// integer and floating point decimal values.
+fn lex_number(l: &mut Lexer) -> Option<StateFn> {
+
+    //
+    // See R7RS 7.1.1 for detailed format for numeric constants
+    //
+    let mut nl = NumberLexer::new();
+
+    // Scan for every conceivable numeric literal known to Scheme...
+    let prefix_result = nl.accept_prefix_r(l);
+    if prefix_result.is_err() {
+        return errorf(l, prefix_result.unwrap_err());
+    }
+    let real_result = nl.accept_real_r(l, true);
+    if real_result.is_err() {
+        return errorf(l, real_result.unwrap_err());
+    }
+    if l.accept("@") {
+        nl.is_complex = true;
+        let real_result2 = nl.accept_real_r(l, false);
+        if real_result2.is_err() {
+            return errorf(l, real_result2.unwrap_err());
+        }
+    } else if l.accept("+-") {
+        nl.is_complex = true;
+        let ureal_result = nl.accept_ureal_r(l, true);
+        if ureal_result.is_err() {
+            return errorf(l, ureal_result.unwrap_err());
+        }
+        if !l.accept("iI") {
+            return errorf(l, "malformed complex")
+        }
+    }
+    if l.accept("iI") {
+        nl.is_complex = true;
+    }
+
+    // Next thing must _not_ be alphanumeric.
+    if let Some(ch) = l.peek() {
+        if ch.is_alphanumeric() {
+            return errorf(l, "malformed number suffix")
+        }
+    }
+    if nl.is_complex {
+        l.emit(TokenType::Complex);
+    } else if nl.is_rational {
+        l.emit(TokenType::Rational);
+    } else if nl.is_float {
+        l.emit(TokenType::Float);
+    } else {
+        l.emit(TokenType::Integer);
+    }
     Some(StateFn(lex_start))
 }
 
@@ -775,11 +985,11 @@ mod test {
     fn test_byte_vectors() {
         let mut vec = Vec::new();
         vec.push(ExpectedResult{typ: TokenType::ByteVector, val: "#u8(".to_string()});
-        // TODO: replace test data with numbers so this at least appears valid
-        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#t".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#f".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Integer, val: "32".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Integer, val: "64".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Integer, val: "128".to_string()});
         vec.push(ExpectedResult{typ: TokenType::CloseParen, val: ")".to_string()});
-        verify_success("#u8(#t #f)", vec);
+        verify_success("#u8(32 64 128)", vec);
     }
 
     #[test]
@@ -829,6 +1039,107 @@ mod test {
     }
 
     #[test]
+    fn test_integers() {
+        let inputs = r#"0 123 #d1234 #d#e1234 #o366 #i#o366 #x7b5 #b01010100 15##"#;
+        let mut vec = Vec::new();
+        vec.push(ExpectedResult{typ: TokenType::Integer, val: "0".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Integer, val: "123".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Integer, val: "#d1234".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Integer, val: "#d#e1234".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Integer, val: "#o366".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Integer, val: "#i#o366".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Integer, val: "#x7b5".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Integer, val: "#b01010100".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Integer, val: "15##".to_string()});
+        verify_success(inputs, vec);
+    }
+
+    #[test]
+    fn test_floats() {
+        let inputs = r#"0.1 1.00 6e4 7.91e+16 3. 12#.### 1.2345e 1.2345s 1.2345f 1.2345d 1.2345l"#;
+        let mut vec = Vec::new();
+        // TODO: need lex_identifier for leading +/- and . to work
+        // vec.push(ExpectedResult{typ: TokenType::Float, val: ".01".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Float, val: "0.1".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Float, val: "1.00".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Float, val: "6e4".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Float, val: "7.91e+16".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Float, val: "3.".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Float, val: "12#.###".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Float, val: "1.2345e".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Float, val: "1.2345s".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Float, val: "1.2345f".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Float, val: "1.2345d".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Float, val: "1.2345l".to_string()});
+        verify_success(inputs, vec);
+    }
+
+    #[test]
+    fn test_complex() {
+        // TODO: need lex_identifier for leading +/- and . to work
+        // let inputs = r#"3+4i 3.0+4.0i 3.0@4.0 3.0-4.0i -4.0i +4.0i 3.0-i 3.0+i -i +i"#;
+        let inputs = r#"3+4i 3.0+4.0i 3.0@4.0 3.0-4.0i 3.0-i 3.0+i"#;
+        let mut vec = Vec::new();
+        vec.push(ExpectedResult{typ: TokenType::Complex, val: "3+4i".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Complex, val: "3.0+4.0i".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Complex, val: "3.0@4.0".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Complex, val: "3.0-4.0i".to_string()});
+        // vec.push(ExpectedResult{typ: TokenType::Complex, val: "-4.0i".to_string()});
+        // vec.push(ExpectedResult{typ: TokenType::Complex, val: "+4.0i".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Complex, val: "3.0-i".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Complex, val: "3.0+i".to_string()});
+        // vec.push(ExpectedResult{typ: TokenType::Complex, val: "-i".to_string()});
+        // vec.push(ExpectedResult{typ: TokenType::Complex, val: "+i".to_string()});
+        verify_success(inputs, vec);
+    }
+
+    #[test]
+    fn test_rationals() {
+        // TODO: need lex_identifier for leading +/- and . to work
+        // let inputs = r#"6/10 123/456 -6/12"#;
+        let inputs = r#"6/10 123/456"#;
+        let mut vec = Vec::new();
+        vec.push(ExpectedResult{typ: TokenType::Rational, val: "6/10".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Rational, val: "123/456".to_string()});
+        // vec.push(ExpectedResult{typ: TokenType::Rational, val: "-6/12".to_string()});
+        verify_success(inputs, vec);
+    }
+
+    #[test]
+    fn test_bad_numbers() {
+        let mut map = HashMap::new();
+        map.insert("0.a", "malformed number suffix");
+        // TODO: weird case, returns as TokenType::Float "0.0"
+        // map.insert("0.0.0", "something wrong");
+        map.insert("0a", "malformed number suffix");
+        map.insert("#dabc", "malformed number suffix");
+        map.insert("#o888", "malformed number suffix");
+        map.insert("#b123", "malformed number suffix");
+        map.insert("#xzyw", "malformed number suffix");
+        map.insert("#b#b00", "malformed number prefix");
+        map.insert("#d#d00", "malformed number prefix");
+        map.insert("#e#e00", "malformed number prefix");
+        map.insert("#i#i00", "malformed number prefix");
+        map.insert("#o#o00", "malformed number prefix");
+        map.insert("#x#x00", "malformed number prefix");
+        map.insert("#b#d00", "malformed number prefix");
+        map.insert("#b#o00", "malformed number prefix");
+        map.insert("#b#x00", "malformed number prefix");
+        map.insert("#d#d00", "malformed number prefix");
+        map.insert("#d#o00", "malformed number prefix");
+        map.insert("#d#x00", "malformed number prefix");
+        map.insert("#o#b00", "malformed number prefix");
+        map.insert("#o#d00", "malformed number prefix");
+        map.insert("#o#x00", "malformed number prefix");
+        map.insert("#x#b00", "malformed number prefix");
+        map.insert("#x#d00", "malformed number prefix");
+        map.insert("#x#o00", "malformed number prefix");
+        map.insert("#e#i00", "malformed number prefix");
+        map.insert("#i#e00", "malformed number prefix");
+        verify_errors(map);
+    }
+
+    #[test]
     fn test_foldcase() {
         let input = r#"#!fold-case #\newLIne
         #!no-fold-case
@@ -848,8 +1159,4 @@ mod test {
 }
 
 // TODO: implement and test lexing a Identifier
-// TODO: implement and test lexing a Integer
-// TODO: implement and test lexing a Float
-// TODO: implement and test lexing a Complex
-// TODO: implement and test lexing a Rational
 // TODO: port over the tests from lexer_test.go in bakeneko
