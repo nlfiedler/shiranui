@@ -29,7 +29,9 @@
 // TODO: remove once the slice vs [..] warnings settle down
 #![allow(deprecated)]
 
+use std::char;
 use std::fmt;
+use std::num;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 
@@ -160,6 +162,33 @@ impl<'a> Lexer<'a> {
         let _ = self.chan.send(Token {
             typ: t,
             val: text.to_string(),
+            row: self.row,
+            col: self.col
+        });
+        self.start = self.pos
+    }
+
+    /// `emit_identifier` will fold the case of the identifier if the #!fold-case
+    /// directive is enabled, then emit the identifier to the token channel.
+    /// Otherwise, no folding is performed before emitting the token, per the
+    /// default. If the ident parameter is `None`, the current token text will
+    /// be emitted, otherwise the value of ident is emitted.
+    fn emit_identifier(&mut self, ident: Option<&str>) {
+        let text;
+        if let Some(id) = ident {
+            text = id;
+        } else {
+            text = self.input.as_slice().slice(self.start, self.pos);
+        }
+        let output;
+        if self.folding {
+            output = fold_case(text);
+        } else {
+            output = text.to_string();
+        }
+        let _ = self.chan.send(Token {
+            typ: TokenType::Identifier,
+            val: output,
             row: self.row,
             col: self.col
         });
@@ -384,17 +413,19 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
                 l.backup();
                 return Some(StateFn(lex_number));
             },
-            _ => return None
+            '@' => {
+                return errorf(l, "@ cannot be the start of a token");
+            },
+            _ => {
+                // let lex_identifier sort out what exactly this is
+                l.backup();
+                return Some(StateFn(lex_identifier));
+            }
         }
     } else {
         l.emit(TokenType::EndOfFile);
         return None;
     }
-    // default:
-    //     // let lex_identifier sort out what exactly this is
-    //     l.backup()
-    //     return lex_identifier
-    // }
     unreachable!();
 }
 
@@ -558,7 +589,7 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
                 return Some(StateFn(lex_character));
             },
             'b' | 'd' | 'e' | 'i' | 'o' | 'x' => {
-                // let lexNumber sort out the prefix
+                // let lex_number sort out the prefix
                 l.rewind();
                 return Some(StateFn(lex_number));
             },
@@ -806,6 +837,109 @@ fn lex_number(l: &mut Lexer) -> Option<StateFn> {
     Some(StateFn(lex_start))
 }
 
+/// `lex_identifier` processes the text at the current location as if it were
+/// an identifier, but may turn out to be a numeric literal instead.
+fn lex_identifier(l: &mut Lexer) -> Option<StateFn> {
+    let mut ident = String::new();
+    // check for special situations, such as the start of a number
+    // (R7RS 2.1, 2.3, 4.1.4, 7.1.1)
+    if let Some(ch) = l.next() {
+        if ch == '.' {
+            if let Some(ch) = l.peek() {
+                if ch.is_digit(10) {
+                    // since we have a decimal point, the number must be base 10
+                    l.rewind();
+                    return Some(StateFn(lex_number));
+                }
+            }
+
+        } else if ch == '+' || ch == '-' {
+            // +/- may be the start of a number or an identifier
+            if let Some(ch) = l.peek() {
+                // unless we see a decimal point, the digit could be base 2, 8, 10, or 16
+                // as for the i/I case, yes, it technically could be an identifier, but
+                // that is almost certainly not what the author intended
+                if ch.is_digit(16) || ch == 'i' || ch == 'I' {
+                    l.rewind();
+                    return Some(StateFn(lex_number));
+                }
+            }
+
+        } else if ch == '|' {
+            // form |identifier| allows anything except \
+            while let Some(ch) = l.next() {
+                if ch == '\\' {
+                    return errorf(l, "\\ not allowed in |identifier|");
+                } else if ch == '|' {
+                    l.emit_identifier(None);
+                    return Some(StateFn(lex_start));
+                }
+            }
+            return errorf(l, "reached EOF in |identifier| expression");
+        }
+
+        // in all other cases, this is the start of an identifier
+        ident.push(ch);
+    }
+
+    // average case identifier that may contain \x escapes
+    while let Some(ch) = l.next() {
+        if ch == '\\' {
+            // TODO: this needs to be moved to a function so || and string can use it
+            //       (and look for a similar function in the standard library, too)
+            // allow for \xXX[X[X]]; hex character escapes in identifiers
+            if let Some(ch) = l.next() {
+                if ch != 'x' {
+                    return errorf(l, "expected 'x' after '\\' in identifier");
+                }
+                let mut hex = String::new();
+                loop {
+                    if let Some(ch) = l.next() {
+                        if ch == ';' {
+                            break;
+                        }
+                        hex.push(ch);
+                    } else {
+                        return errorf(l, "missing ; after \\x escape in identifier");
+                    }
+                }
+                // verify this is a valid inline hex escape value
+                match num::from_str_radix::<u32>(hex.as_slice(), 16) {
+                    Ok(code) => {
+                        match char::from_u32(code) {
+                            Some(x) => ident.push(x),
+                            None => {
+                                return errorf(l, format!("invalid UTF code point: {}", hex)
+                                    .as_slice());
+                            }
+                        }
+                    },
+                    Err(_) => {
+                        return errorf(l, "invalid hex escape in identifier");
+                    }
+                }
+            } else {
+                return errorf(l, "expected escape code in identifier");
+            }
+        } else {
+            // check for the end of the identifier (note that these are assumed
+            // to not appear as the first character, as lex_start would have
+            // sent control to some other state function)
+            if "'\",`;() \t\n\r".contains_char(ch) {
+                l.backup();
+                break;
+            }
+            // identifiers are letters, numbers, and extended characters (R7RS 2.1)
+            if !ch.is_alphanumeric() && !"!$%&*+-./:<=>?@^_~".contains_char(ch) {
+                return errorf(l, "invalid subsequent identifier character");
+            }
+            ident.push(ch);
+        }
+    }
+    l.emit_identifier(Some(ident.as_slice()));
+    return Some(StateFn(lex_start));
+}
+
 #[cfg(test)]
 mod test {
 
@@ -844,11 +978,28 @@ mod test {
         }
     }
 
+    /// `verify_singles` verifies individual expressions to check for
+    /// special cases in the lexer.
+    fn verify_singles(inputs: HashMap<&str, ExpectedResult>) {
+        for (input, er) in inputs.iter() {
+            let rx = lex("verify_singles", input);
+            if let Some(token) = rx.recv().ok() {
+                if token.typ == TokenType::Error {
+                    panic!("lex failed for {} with {}", input, token.val);
+                }
+                assert_eq!(token.typ, er.typ);
+                assert_eq!(token.val, er.val);
+            } else {
+                assert!(false, "ran out of tokens");
+            }
+        }
+    }
+
     /// `verify_errors` checks that the input (map key) produces an error
     /// containing the substring given as the map value.
     fn verify_errors(inputs: HashMap<&str, &str>) {
         for (input, expected) in inputs.iter() {
-            let rx = lex("unit", input);
+            let rx = lex("verify_errors", input);
             if let Some(token) = rx.recv().ok() {
                 assert_eq!(token.typ, TokenType::Error);
                 assert!(token.val.contains(expected), "expected {} error", expected);
@@ -904,6 +1055,10 @@ mod test {
         let mut vec = Vec::new();
         vec.push(ExpectedResult{typ: TokenType::String, val: "\"foo\"".to_string()});
         verify_success("\"foo\"", vec);
+        // TODO: test \a \b \t \n \r
+        // TODO: test \" and \\
+        // TODO: test \ before line ending
+        // TODO: test inline hex escape (\xDDDD)
         // error cases
         let mut map = HashMap::new();
         map.insert("\"foo", "unclosed quoted string");
@@ -1056,10 +1211,9 @@ mod test {
 
     #[test]
     fn test_floats() {
-        let inputs = r#"0.1 1.00 6e4 7.91e+16 3. 12#.### 1.2345e 1.2345s 1.2345f 1.2345d 1.2345l"#;
+        let inputs = r#".01 0.1 1.00 6e4 7.91e+16 3. 12#.### 1.2345e 1.2345s 1.2345f 1.2345d 1.2345l"#;
         let mut vec = Vec::new();
-        // TODO: need lex_identifier for leading +/- and . to work
-        // vec.push(ExpectedResult{typ: TokenType::Float, val: ".01".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Float, val: ".01".to_string()});
         vec.push(ExpectedResult{typ: TokenType::Float, val: "0.1".to_string()});
         vec.push(ExpectedResult{typ: TokenType::Float, val: "1.00".to_string()});
         vec.push(ExpectedResult{typ: TokenType::Float, val: "6e4".to_string()});
@@ -1076,32 +1230,28 @@ mod test {
 
     #[test]
     fn test_complex() {
-        // TODO: need lex_identifier for leading +/- and . to work
-        // let inputs = r#"3+4i 3.0+4.0i 3.0@4.0 3.0-4.0i -4.0i +4.0i 3.0-i 3.0+i -i +i"#;
-        let inputs = r#"3+4i 3.0+4.0i 3.0@4.0 3.0-4.0i 3.0-i 3.0+i"#;
+        let inputs = r#"3+4i 3.0+4.0i 3.0@4.0 3.0-4.0i -4.0i +4.0i 3.0-i 3.0+i -i +i"#;
         let mut vec = Vec::new();
         vec.push(ExpectedResult{typ: TokenType::Complex, val: "3+4i".to_string()});
         vec.push(ExpectedResult{typ: TokenType::Complex, val: "3.0+4.0i".to_string()});
         vec.push(ExpectedResult{typ: TokenType::Complex, val: "3.0@4.0".to_string()});
         vec.push(ExpectedResult{typ: TokenType::Complex, val: "3.0-4.0i".to_string()});
-        // vec.push(ExpectedResult{typ: TokenType::Complex, val: "-4.0i".to_string()});
-        // vec.push(ExpectedResult{typ: TokenType::Complex, val: "+4.0i".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Complex, val: "-4.0i".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Complex, val: "+4.0i".to_string()});
         vec.push(ExpectedResult{typ: TokenType::Complex, val: "3.0-i".to_string()});
         vec.push(ExpectedResult{typ: TokenType::Complex, val: "3.0+i".to_string()});
-        // vec.push(ExpectedResult{typ: TokenType::Complex, val: "-i".to_string()});
-        // vec.push(ExpectedResult{typ: TokenType::Complex, val: "+i".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Complex, val: "-i".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Complex, val: "+i".to_string()});
         verify_success(inputs, vec);
     }
 
     #[test]
     fn test_rationals() {
-        // TODO: need lex_identifier for leading +/- and . to work
-        // let inputs = r#"6/10 123/456 -6/12"#;
-        let inputs = r#"6/10 123/456"#;
+        let inputs = r#"6/10 123/456 -6/12"#;
         let mut vec = Vec::new();
         vec.push(ExpectedResult{typ: TokenType::Rational, val: "6/10".to_string()});
         vec.push(ExpectedResult{typ: TokenType::Rational, val: "123/456".to_string()});
-        // vec.push(ExpectedResult{typ: TokenType::Rational, val: "-6/12".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Rational, val: "-6/12".to_string()});
         verify_success(inputs, vec);
     }
 
@@ -1140,6 +1290,89 @@ mod test {
     }
 
     #[test]
+    fn test_identifier_singles() {
+        let mut map = HashMap::new();
+        map.insert("lambda", ExpectedResult{typ: TokenType::Identifier, val: "lambda".to_string()});
+        map.insert("q", ExpectedResult{typ: TokenType::Identifier, val: "q".to_string()});
+        map.insert("ab12", ExpectedResult{typ: TokenType::Identifier, val: "ab12".to_string()});
+        map.insert("two\\x20;words", ExpectedResult{typ: TokenType::Identifier, val: "two words".to_string()});
+        map.insert("+", ExpectedResult{typ: TokenType::Identifier, val: "+".to_string()});
+        map.insert("++", ExpectedResult{typ: TokenType::Identifier, val: "++".to_string()});
+        map.insert("+-", ExpectedResult{typ: TokenType::Identifier, val: "+-".to_string()});
+        map.insert("+@", ExpectedResult{typ: TokenType::Identifier, val: "+@".to_string()});
+        map.insert("-", ExpectedResult{typ: TokenType::Identifier, val: "-".to_string()});
+        map.insert("--", ExpectedResult{typ: TokenType::Identifier, val: "--".to_string()});
+        map.insert("-+", ExpectedResult{typ: TokenType::Identifier, val: "-+".to_string()});
+        map.insert("-@", ExpectedResult{typ: TokenType::Identifier, val: "-@".to_string()});
+        // TODO: get the rest of these working
+        // map.insert("+a", ExpectedResult{typ: TokenType::Identifier, val: "+a".to_string()});
+        // map.insert("+.a", ExpectedResult{typ: TokenType::Identifier, val: "+.a".to_string()});
+        // map.insert("+..a", ExpectedResult{typ: TokenType::Identifier, val: "+..a".to_string()});
+        // map.insert("-a", ExpectedResult{typ: TokenType::Identifier, val: "-a".to_string()});
+        // map.insert("-.a", ExpectedResult{typ: TokenType::Identifier, val: "-.a".to_string()});
+        // map.insert("-..a", ExpectedResult{typ: TokenType::Identifier, val: "-..a".to_string()});
+        // map.insert(".a", ExpectedResult{typ: TokenType::Identifier, val: ".a".to_string()});
+        // map.insert("..a", ExpectedResult{typ: TokenType::Identifier, val: "..a".to_string()});
+        map.insert(".", ExpectedResult{typ: TokenType::Identifier, val: ".".to_string()});
+        map.insert("..", ExpectedResult{typ: TokenType::Identifier, val: "..".to_string()});
+        map.insert("...", ExpectedResult{typ: TokenType::Identifier, val: "...".to_string()});
+        map.insert("!", ExpectedResult{typ: TokenType::Identifier, val: "!".to_string()});
+        map.insert("$", ExpectedResult{typ: TokenType::Identifier, val: "$".to_string()});
+        map.insert("%", ExpectedResult{typ: TokenType::Identifier, val: "%".to_string()});
+        map.insert("&", ExpectedResult{typ: TokenType::Identifier, val: "&".to_string()});
+        map.insert("*", ExpectedResult{typ: TokenType::Identifier, val: "*".to_string()});
+        map.insert("/", ExpectedResult{typ: TokenType::Identifier, val: "/".to_string()});
+        map.insert(":", ExpectedResult{typ: TokenType::Identifier, val: ":".to_string()});
+        map.insert("<", ExpectedResult{typ: TokenType::Identifier, val: "<".to_string()});
+        map.insert("=", ExpectedResult{typ: TokenType::Identifier, val: "=".to_string()});
+        map.insert(">", ExpectedResult{typ: TokenType::Identifier, val: ">".to_string()});
+        map.insert("?", ExpectedResult{typ: TokenType::Identifier, val: "?".to_string()});
+        map.insert("^", ExpectedResult{typ: TokenType::Identifier, val: "^".to_string()});
+        map.insert("_", ExpectedResult{typ: TokenType::Identifier, val: "_".to_string()});
+        map.insert("~", ExpectedResult{typ: TokenType::Identifier, val: "~".to_string()});
+        map.insert("list->vector", ExpectedResult{typ: TokenType::Identifier, val: "list->vector".to_string()});
+        map.insert("+soup+", ExpectedResult{typ: TokenType::Identifier, val: "+soup+".to_string()});
+        map.insert("V17a", ExpectedResult{typ: TokenType::Identifier, val: "V17a".to_string()});
+        map.insert("<=?", ExpectedResult{typ: TokenType::Identifier, val: "<=?".to_string()});
+        map.insert("a34kTMNs", ExpectedResult{typ: TokenType::Identifier, val: "a34kTMNs".to_string()});
+        map.insert("|two words|", ExpectedResult{typ: TokenType::Identifier, val: "|two words|".to_string()});
+        map.insert("t-w-r-h-m-m", ExpectedResult{typ: TokenType::Identifier, val: "t-w-r-h-m-m".to_string()});
+        map.insert("||", ExpectedResult{typ: TokenType::Identifier, val: "||".to_string()});
+        map.insert("|foo @#$! bar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo @#$! bar|".to_string()});
+        // TODO: get the rest of these working
+        // map.insert("|foo\\x20;bar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo bar|".to_string()});
+        // map.insert("|foo\\rbar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo\rbar|".to_string()});
+        // map.insert("|foo\\|bar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo|bar|".to_string()});
+        map.insert("two\\x20;\\x20;words", ExpectedResult{typ: TokenType::Identifier, val: "two  words".to_string()});
+        verify_singles(map);
+    }
+
+    #[test]
+    fn test_identifier_errors() {
+        let mut map = HashMap::new();
+        // map.insert("\\xD801", "invalid UTF code point"); TODO
+        // map.insert("|f\\b|", "\\ not allowed in |identifier|"); TODO
+        map.insert("|foo", "reached EOF in |identifier| expression");
+        // map.insert("\\p123", "expected 'x' after '\\' in identifier"); TODO
+        // map.insert("\\xFF", "missing ; after \\x escape in identifier"); TODO
+        // map.insert("\\xXYZ;", "invalid hex escape in identifier"); TODO
+        // map.insert("\\", "expected escape code in identifier"); TODO
+        map.insert("foo#", "invalid subsequent identifier character");
+        map.insert("foo|", "invalid subsequent identifier character");
+        // TODO: i am not convinced this is correct, see R7RS 7.1.1
+        // if "'\",`;() \t\n\r".contains_char(ch) {
+        // map.insert("foo'", "invalid subsequent identifier character");
+        // map.insert("foo,", "invalid subsequent identifier character");
+        // map.insert("foo`", "invalid subsequent identifier character");
+        // map.insert("foo;", "invalid subsequent identifier character");
+        map.insert("foo[", "invalid subsequent identifier character");
+        map.insert("foo]", "invalid subsequent identifier character");
+        map.insert("foo{", "invalid subsequent identifier character");
+        map.insert("foo}", "invalid subsequent identifier character");
+        verify_errors(map);
+    }
+
+    #[test]
     fn test_foldcase() {
         let input = r#"#!fold-case #\newLIne
         #!no-fold-case
@@ -1158,5 +1391,4 @@ mod test {
     }
 }
 
-// TODO: implement and test lexing a Identifier
 // TODO: port over the tests from lexer_test.go in bakeneko
