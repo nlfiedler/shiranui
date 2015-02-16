@@ -94,7 +94,7 @@ pub struct Token {
 impl fmt::Display for Token {
 
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "TODO: String behavior for Token")
+        write!(f, "Token[{}: '{}' <{}:{}>]", self.typ, self.val, self.row, self.col)
     }
 }
 
@@ -123,7 +123,7 @@ struct Lexer<'a> {
 impl<'a> fmt::Display for Lexer<'a> {
 
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "TODO: String behavior for Lexer")
+        write!(f, "Lexer for '{}' at offset {}", self.name, self.pos)
     }
 }
 
@@ -171,8 +171,8 @@ impl<'a> Lexer<'a> {
     /// `emit_identifier` will fold the case of the identifier if the #!fold-case
     /// directive is enabled, then emit the identifier to the token channel.
     /// Otherwise, no folding is performed before emitting the token, per the
-    /// default. If the ident parameter is `None`, the current token text will
-    /// be emitted, otherwise the value of ident is emitted.
+    /// default. If the `ident` parameter is `None`, the current token text will
+    /// be emitted, otherwise the value of `ident` is emitted.
     fn emit_identifier(&mut self, ident: Option<&str>) {
         let text;
         if let Some(id) = ident {
@@ -201,7 +201,8 @@ impl<'a> Lexer<'a> {
     }
 
     /// `token_matches` returns true if the current token matches the given
-    /// text exactly (case-sensitive), and false otherwise.
+    /// text exactly (case-sensitive), and false otherwise. If the `folding`
+    /// argument is true, the string is lowercased before comparing.
     fn token_matches(&mut self, query: &str, folding: bool) -> bool {
         let text = self.input.as_slice().slice(self.start, self.pos);
         if folding {
@@ -365,18 +366,6 @@ fn errorf(l: &mut Lexer, message: &str) -> Option<StateFn> {
     None
 }
 
-/// `sanitize_input` prepares the input program for lexing, which basically
-/// means converting various end-of-line character sequences to a single
-/// form, namely newlines.
-fn sanitize_input(input: &str) -> String {
-    input.replace("\r\n", "\n").replace("\r", "\n")
-}
-
-/// `fold_case` converts the given `str` to all lowercase.
-fn fold_case(s: &str) -> String {
-    s.chars().map(|c| c.to_lowercase()).collect::<String>()
-}
-
 /// `lex_start` reads the next token from the input and determines what
 /// to do with that token, returning the appropriate state function.
 fn lex_start(l: &mut Lexer) -> Option<StateFn> {
@@ -415,6 +404,12 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
             },
             '@' => {
                 return errorf(l, "@ cannot be the start of a token");
+            },
+            '\\' => {
+                return errorf(l, "\\ cannot be the start of a token");
+            },
+            '|' => {
+                return Some(StateFn(lex_pipe_identifier));
             },
             _ => {
                 // let lex_identifier sort out what exactly this is
@@ -603,6 +598,7 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
 
 /// `lex_character` processes a character literal.
 fn lex_character(l: &mut Lexer) -> Option<StateFn> {
+    // TODO: check for \xNNNN; <inline hex escape>
     // check for one of the many special character names
     if l.folding {
         l.accept_run("abcdeiklmnoprstuwABCDEIKLMNOPRSTUW");
@@ -841,6 +837,7 @@ fn lex_number(l: &mut Lexer) -> Option<StateFn> {
 /// an identifier, but may turn out to be a numeric literal instead.
 fn lex_identifier(l: &mut Lexer) -> Option<StateFn> {
     let mut ident = String::new();
+    // TODO: this needs to move to lex_start and be handled specially
     // check for special situations, such as the start of a number
     // (R7RS 2.1, 2.3, 4.1.4, 7.1.1)
     if let Some(ch) = l.next() {
@@ -856,99 +853,168 @@ fn lex_identifier(l: &mut Lexer) -> Option<StateFn> {
         } else if ch == '+' || ch == '-' {
             // +/- may be the start of a number or an identifier
             if let Some(ch) = l.peek() {
-                // unless we see a decimal point, the digit could be base 2, 8, 10, or 16
-                // as for the i/I case, yes, it technically could be an identifier, but
-                // that is almost certainly not what the author intended
-                if ch.is_digit(16) || ch == 'i' || ch == 'I' {
+                // TODO: needs to be smarter here, could be +inf.0, -inf.0, +nan.0, -nan.0, #x, etc.
+                if ch.is_digit(10) || ch == 'i' || ch == 'I' {
                     l.rewind();
                     return Some(StateFn(lex_number));
                 }
             }
-
-        } else if ch == '|' {
-            // form |identifier| allows anything except \
-            while let Some(ch) = l.next() {
-                if ch == '\\' {
-                    return errorf(l, "\\ not allowed in |identifier|");
-                } else if ch == '|' {
-                    l.emit_identifier(None);
-                    return Some(StateFn(lex_start));
-                }
-            }
-            return errorf(l, "reached EOF in |identifier| expression");
         }
 
         // in all other cases, this is the start of an identifier
         ident.push(ch);
     }
 
+    // TODO: enforce <initial>: <letter> | <special initial>
+    // TODO: <special initial>: '!' | '$' | '%' | '&' | '*' | '/' | ':' | '<' | '=' | '>' | '?' | '^' | '_' | '~'
+    // TODO: enforce <subsequent>: <initial> | <digit> | <special subsequent>
+    // TODO: enforce <peculiar identifier>
+
     // average case identifier that may contain \x escapes
     while let Some(ch) = l.next() {
-        if ch == '\\' {
-            // TODO: this needs to be moved to a function so || and string can use it
-            //       (and look for a similar function in the standard library, too)
-            // allow for \xXX[X[X]]; hex character escapes in identifiers
-            if let Some(ch) = l.next() {
-                if ch != 'x' {
-                    return errorf(l, "expected 'x' after '\\' in identifier");
-                }
-                let mut hex = String::new();
-                loop {
-                    if let Some(ch) = l.next() {
-                        if ch == ';' {
-                            break;
-                        }
-                        hex.push(ch);
-                    } else {
-                        return errorf(l, "missing ; after \\x escape in identifier");
-                    }
-                }
-                // verify this is a valid inline hex escape value
-                match num::from_str_radix::<u32>(hex.as_slice(), 16) {
-                    Ok(code) => {
-                        match char::from_u32(code) {
-                            Some(x) => ident.push(x),
-                            None => {
-                                return errorf(l, format!("invalid UTF code point: {}", hex)
-                                    .as_slice());
-                            }
-                        }
-                    },
-                    Err(_) => {
-                        return errorf(l, "invalid hex escape in identifier");
-                    }
-                }
-            } else {
-                return errorf(l, "expected escape code in identifier");
-            }
-        } else {
-            // check for the end of the identifier (note that these are assumed
-            // to not appear as the first character, as lex_start would have
-            // sent control to some other state function)
-            if "'\",`;() \t\n\r".contains_char(ch) {
-                l.backup();
-                break;
-            }
-            // identifiers are letters, numbers, and extended characters (R7RS 2.1)
-            if !ch.is_alphanumeric() && !"!$%&*+-./:<=>?@^_~".contains_char(ch) {
-                return errorf(l, "invalid subsequent identifier character");
-            }
-            ident.push(ch);
+        // check for the end of the identifier (note that these are assumed
+        // to not appear as the first character, as lex_start would have
+        // sent control to some other state function)
+        if "'\",`;() \t\n\r".contains_char(ch) {
+            l.backup();
+            break;
         }
+        // identifiers are letters, numbers, and extended characters (R7RS 2.1)
+        if !ch.is_alphanumeric() && !"!$%&*+-./:<=>?@^_~".contains_char(ch) {
+            return errorf(l, "invalid subsequent identifier character");
+        }
+        ident.push(ch);
     }
     l.emit_identifier(Some(ident.as_slice()));
     return Some(StateFn(lex_start));
 }
 
+/// `lex_pipe_identifier` expects the first character to be a vertical
+/// bar (|) and scans the text until it finds an unescaped vertical bar.
+/// The text inbetween may contains inline hex escapes and mnemonic escapes.
+fn lex_pipe_identifier(l: &mut Lexer) -> Option<StateFn> {
+    let mut ident = String::new();
+    ident.push('|');
+    // form |identifier| allows nearly anything
+    while let Some(ch) = l.next() {
+        if ch == '\\' {
+            if let Some(ch) = l.next() {
+                match ch {
+                    // \ is only permitted before specific characters
+                    '|' => ident.push('|'),
+                    'a' => ident.push('\x07'),
+                    'b' => ident.push('\x08'),
+                    't' => ident.push('\t'),
+                    'n' => ident.push('\n'),
+                    'r' => ident.push('\r'),
+                    'x' => {
+                        ident.push('\\');
+                        ident.push(ch);
+                    },
+                    // everything else is wrong
+                    _ => {
+                        return errorf(l, "bare \\ prohibited in |identifier|");
+                    }
+                }
+            } else {
+                return errorf(l, "reached EOF in |identifier| expression");
+            }
+        } else if ch == '|' {
+            ident.push(ch);
+            match replace_escapes(ident.as_slice()) {
+                Ok(escaped) => {
+                    l.emit_identifier(Some(escaped.as_slice()));
+                    return Some(StateFn(lex_start));
+                },
+                Err(msg) => {
+                    return errorf(l, msg);
+                }
+            }
+        } else {
+            ident.push(ch);
+        }
+    }
+    return errorf(l, "reached EOF in |identifier| expression");
+}
+
+/// `sanitize_input` prepares the input program for lexing, which basically
+/// means converting various end-of-line character sequences to a single
+/// form, namely newlines.
+fn sanitize_input(input: &str) -> String {
+    input.replace("\r\n", "\n").replace("\r", "\n")
+}
+
+/// `fold_case` converts the given `str` to all lowercase.
+fn fold_case(s: &str) -> String {
+    s.chars().map(|c| c.to_lowercase()).collect::<String>()
+}
+
+/// `replace_escapes` replaces any \xNNNN; escape sequences with the Unicode
+/// code point identified by the NNNN hexadecimal value, where NNNN can be
+/// two, three, or four hexadecimal digits. The code point must be valid.
+/// Also handles the \a, \b, \t, \n, and \r escapes.
+fn replace_escapes(text: &str) -> Result<String, &'static str> {
+    let mut result = String::new();
+    let mut iter = text.chars();
+    while let Some(ch) = iter.next() {
+        if ch == '\\' {
+            if let Some(ch) = iter.next() {
+                match ch {
+                    'a' => result.push('\x07'),
+                    'b' => result.push('\x08'),
+                    't' => result.push('\t'),
+                    'n' => result.push('\n'),
+                    'r' => result.push('\r'),
+                    'x' => {
+                        let mut hex = String::new();
+                        loop {
+                            if let Some(ch) = iter.next() {
+                                if ch == ';' {
+                                    break;
+                                }
+                                hex.push(ch);
+                            } else {
+                                return Err("missing ; after \\x escape sequence");
+                            }
+                        }
+                        // verify this is a valid inline hex escape value
+                        match num::from_str_radix::<u32>(hex.as_slice(), 16) {
+                            Ok(code) => {
+                                match char::from_u32(code) {
+                                    Some(x) => result.push(x),
+                                    None => {
+                                        return Err("invalid UTF code point");
+                                    }
+                                }
+                            },
+                            Err(_) => {
+                                return Err("invalid hexadecimal escape code");
+                            }
+                        }
+                    },
+                    _ => {
+                        return Err("expected x|a|b|t|n|r after \\ in escape sequence");
+                    }
+                }
+            } else {
+                return Err("reached EOF after \\ escape");
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod test {
 
-    use super::{lex, sanitize_input, fold_case, TokenType};
+    use super::{lex, fold_case, replace_escapes, sanitize_input, TokenType};
     use std::collections::HashMap;
     use std::fmt;
     use std::vec::Vec;
 
-    struct ExpectedResult {
+    struct ExpectedResult { // TODO: replace this with a simple tuple
         typ: TokenType,
         val: String
     }
@@ -1032,6 +1098,20 @@ mod test {
     }
 
     #[test]
+    fn test_replace_escapes() {
+        // normal cases
+        assert_eq!(replace_escapes("foo bar baz quux").unwrap(), "foo bar baz quux".to_string());
+        assert_eq!(replace_escapes("foo\\x20;quux").unwrap(), "foo quux".to_string());
+        assert_eq!(replace_escapes("\\x65e5;\\x672c;\\x8a9e;").unwrap(), "日本語".to_string());
+        // error cases
+        assert_eq!(replace_escapes("\\f").unwrap_err(), "expected x|a|b|t|n|r after \\ in escape sequence");
+        assert_eq!(replace_escapes("\\xAB").unwrap_err(), "missing ; after \\x escape sequence");
+        assert_eq!(replace_escapes("\\xD801;").unwrap_err(), "invalid UTF code point");
+        assert_eq!(replace_escapes("\\xGGGG;").unwrap_err(), "invalid hexadecimal escape code");
+        assert_eq!(replace_escapes("\\").unwrap_err(), "reached EOF after \\ escape");
+    }
+
+    #[test]
     fn test_empty_input() {
         let rx = lex("unit", "");
         if let Some(token) = rx.recv().ok() {
@@ -1072,11 +1152,21 @@ mod test {
         map.insert("]", "use of reserved character");
         map.insert("{", "use of reserved character");
         map.insert("}", "use of reserved character");
+        map.insert("@", "@ cannot be the start of a token");
+        map.insert("\\", "\\ cannot be the start of a token");
         verify_errors(map);
     }
 
     #[test]
-    fn test_ignore_separators() {
+    fn test_invalid_hashes() {
+        let mut map = HashMap::new();
+        map.insert("#zero", "unrecognized hash value");
+        map.insert("#", "reached EOF in hash expression");
+        verify_errors(map);
+    }
+
+    #[test]
+    fn test_separators() {
         let mut vec = Vec::new();
         vec.push(ExpectedResult{typ: TokenType::OpenParen, val: "(".to_string()});
         vec.push(ExpectedResult{typ: TokenType::CloseParen, val: ")".to_string()});
@@ -1084,7 +1174,7 @@ mod test {
     }
 
     #[test]
-    fn test_ignore_comments() {
+    fn test_ignored_comments() {
         let mut vec = Vec::new();
         vec.push(ExpectedResult{typ: TokenType::OpenParen, val: "(".to_string()});
         vec.push(ExpectedResult{typ: TokenType::CloseParen, val: ")".to_string()});
@@ -1092,11 +1182,14 @@ mod test {
     }
 
     #[test]
-    fn test_ignore_block_comments() {
+    fn test_block_comments() {
         let mut vec = Vec::new();
         vec.push(ExpectedResult{typ: TokenType::OpenParen, val: "(".to_string()});
         vec.push(ExpectedResult{typ: TokenType::CloseParen, val: ")".to_string()});
         verify_success("#| outer #| nested |# outer |# ( #| bar |# )", vec);
+        let mut map = HashMap::new();
+        map.insert("#| foo", "unclosed block comment");
+        verify_errors(map);
     }
 
     #[test]
@@ -1145,6 +1238,11 @@ mod test {
         vec.push(ExpectedResult{typ: TokenType::Integer, val: "128".to_string()});
         vec.push(ExpectedResult{typ: TokenType::CloseParen, val: ")".to_string()});
         verify_success("#u8(32 64 128)", vec);
+        let mut map = HashMap::new();
+        map.insert("#u ", "invalid byte vector expression");
+        map.insert("#u8 ", "invalid byte vector expression");
+        map.insert("#u", "reached EOF in byte vector expression");
+        verify_errors(map);
     }
 
     #[test]
@@ -1243,6 +1341,16 @@ mod test {
         vec.push(ExpectedResult{typ: TokenType::Complex, val: "-i".to_string()});
         vec.push(ExpectedResult{typ: TokenType::Complex, val: "+i".to_string()});
         verify_success(inputs, vec);
+        // TODO: test for <infnan> cases
+        // let mut map = HashMap::new();
+        // map.insert("", ExpectedResult{typ: TokenType::Complex, val: "1+inf.0".to_string()});
+        // map.insert("", ExpectedResult{typ: TokenType::Complex, val: "1-inf.0".to_string()});
+        // map.insert("", ExpectedResult{typ: TokenType::Complex, val: "1+nan.0".to_string()});
+        // map.insert("", ExpectedResult{typ: TokenType::Complex, val: "1-nan.0".to_string()});
+        // verify_singles(map);
+        let mut map = HashMap::new();
+        map.insert("3.0+4.0", "malformed complex");
+        verify_errors(map);
     }
 
     #[test]
@@ -1295,7 +1403,6 @@ mod test {
         map.insert("lambda", ExpectedResult{typ: TokenType::Identifier, val: "lambda".to_string()});
         map.insert("q", ExpectedResult{typ: TokenType::Identifier, val: "q".to_string()});
         map.insert("ab12", ExpectedResult{typ: TokenType::Identifier, val: "ab12".to_string()});
-        map.insert("two\\x20;words", ExpectedResult{typ: TokenType::Identifier, val: "two words".to_string()});
         map.insert("+", ExpectedResult{typ: TokenType::Identifier, val: "+".to_string()});
         map.insert("++", ExpectedResult{typ: TokenType::Identifier, val: "++".to_string()});
         map.insert("+-", ExpectedResult{typ: TokenType::Identifier, val: "+-".to_string()});
@@ -1304,15 +1411,14 @@ mod test {
         map.insert("--", ExpectedResult{typ: TokenType::Identifier, val: "--".to_string()});
         map.insert("-+", ExpectedResult{typ: TokenType::Identifier, val: "-+".to_string()});
         map.insert("-@", ExpectedResult{typ: TokenType::Identifier, val: "-@".to_string()});
-        // TODO: get the rest of these working
-        // map.insert("+a", ExpectedResult{typ: TokenType::Identifier, val: "+a".to_string()});
-        // map.insert("+.a", ExpectedResult{typ: TokenType::Identifier, val: "+.a".to_string()});
-        // map.insert("+..a", ExpectedResult{typ: TokenType::Identifier, val: "+..a".to_string()});
-        // map.insert("-a", ExpectedResult{typ: TokenType::Identifier, val: "-a".to_string()});
-        // map.insert("-.a", ExpectedResult{typ: TokenType::Identifier, val: "-.a".to_string()});
-        // map.insert("-..a", ExpectedResult{typ: TokenType::Identifier, val: "-..a".to_string()});
-        // map.insert(".a", ExpectedResult{typ: TokenType::Identifier, val: ".a".to_string()});
-        // map.insert("..a", ExpectedResult{typ: TokenType::Identifier, val: "..a".to_string()});
+        map.insert("+g", ExpectedResult{typ: TokenType::Identifier, val: "+g".to_string()});
+        map.insert("+.a", ExpectedResult{typ: TokenType::Identifier, val: "+.a".to_string()});
+        map.insert("+..a", ExpectedResult{typ: TokenType::Identifier, val: "+..a".to_string()});
+        map.insert("-g", ExpectedResult{typ: TokenType::Identifier, val: "-g".to_string()});
+        map.insert("-.a", ExpectedResult{typ: TokenType::Identifier, val: "-.a".to_string()});
+        map.insert("-..a", ExpectedResult{typ: TokenType::Identifier, val: "-..a".to_string()});
+        map.insert(".a", ExpectedResult{typ: TokenType::Identifier, val: ".a".to_string()});
+        map.insert("..a", ExpectedResult{typ: TokenType::Identifier, val: "..a".to_string()});
         map.insert(".", ExpectedResult{typ: TokenType::Identifier, val: ".".to_string()});
         map.insert("..", ExpectedResult{typ: TokenType::Identifier, val: "..".to_string()});
         map.insert("...", ExpectedResult{typ: TokenType::Identifier, val: "...".to_string()});
@@ -1339,24 +1445,28 @@ mod test {
         map.insert("t-w-r-h-m-m", ExpectedResult{typ: TokenType::Identifier, val: "t-w-r-h-m-m".to_string()});
         map.insert("||", ExpectedResult{typ: TokenType::Identifier, val: "||".to_string()});
         map.insert("|foo @#$! bar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo @#$! bar|".to_string()});
-        // TODO: get the rest of these working
-        // map.insert("|foo\\x20;bar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo bar|".to_string()});
-        // map.insert("|foo\\rbar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo\rbar|".to_string()});
-        // map.insert("|foo\\|bar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo|bar|".to_string()});
-        map.insert("two\\x20;\\x20;words", ExpectedResult{typ: TokenType::Identifier, val: "two  words".to_string()});
+        map.insert("|foo\\abar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo\x07bar|".to_string()});
+        map.insert("|foo\\bbar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo\x08bar|".to_string()});
+        map.insert("|foo\\tbar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo\tbar|".to_string()});
+        map.insert("|foo\\nbar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo\nbar|".to_string()});
+        map.insert("|foo\\rbar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo\rbar|".to_string()});
+        map.insert("|foo\\|bar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo|bar|".to_string()});
+        map.insert("|foo\\x20;bar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo bar|".to_string()});
+        map.insert("|foo\\x20;\\x20;bar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo  bar|".to_string()});
         verify_singles(map);
     }
 
     #[test]
     fn test_identifier_errors() {
         let mut map = HashMap::new();
-        // map.insert("\\xD801", "invalid UTF code point"); TODO
-        // map.insert("|f\\b|", "\\ not allowed in |identifier|"); TODO
+        // TODO: why are these not errors?
+        // map.insert("|a\\p123|", "expected 'x' after '\\' in identifier");
+        // map.insert("|a\\xFF|", "missing ; after \\x escape in identifier");
+        // map.insert("|a\\xXYZ;|", "invalid hex escape in identifier");
+        // map.insert("|a\\z|", "expected escape code in identifier");
+        map.insert("|a\\xD801;|", "invalid UTF code point");
+        map.insert("|f\\q|", "bare \\ prohibited in |identifier|");
         map.insert("|foo", "reached EOF in |identifier| expression");
-        // map.insert("\\p123", "expected 'x' after '\\' in identifier"); TODO
-        // map.insert("\\xFF", "missing ; after \\x escape in identifier"); TODO
-        // map.insert("\\xXYZ;", "invalid hex escape in identifier"); TODO
-        // map.insert("\\", "expected escape code in identifier"); TODO
         map.insert("foo#", "invalid subsequent identifier character");
         map.insert("foo|", "invalid subsequent identifier character");
         // TODO: i am not convinced this is correct, see R7RS 7.1.1
@@ -1373,7 +1483,7 @@ mod test {
     }
 
     #[test]
-    fn test_foldcase() {
+    fn test_foldcase_characters() {
         let input = r#"#!fold-case #\newLIne
         #!no-fold-case
         #\newline
@@ -1381,13 +1491,38 @@ mod test {
         #\NEWLINE
         #!no-fold-case
         #\newline"#;
-        // TODO: add identifiers as well, once lex_identifier is ready
         let mut vec = Vec::new();
         vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\n".to_string()});
         vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\n".to_string()});
         vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\n".to_string()});
         vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\n".to_string()});
         verify_success(input, vec);
+    }
+
+    #[test]
+    fn test_foldcase_identifiers() {
+        let input = r#"#!fold-case lAMbdA
+        #!no-fold-case
+        lAMbdA
+        #!fold-case
+        LAMBDA
+        #!no-fold-case
+        lamBDA"#;
+        let mut vec = Vec::new();
+        vec.push(ExpectedResult{typ: TokenType::Identifier, val: "lambda".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Identifier, val: "lAMbdA".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Identifier, val: "lambda".to_string()});
+        vec.push(ExpectedResult{typ: TokenType::Identifier, val: "lamBDA".to_string()});
+        verify_success(input, vec);
+    }
+
+    #[test]
+    fn test_invalid_directive() {
+        let mut map = HashMap::new();
+        map.insert("#!fold-cases", "invalid Scheme directive");
+        map.insert("#!nofold-case", "invalid Scheme directive");
+        map.insert("#!kazaam", "invalid Scheme directive");
+        verify_errors(map);
     }
 }
 

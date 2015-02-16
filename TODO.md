@@ -9,6 +9,7 @@
 
 * Lexer
 * Terms and Sequences
+* Garbage collector
 * Parser
 * Basic interpreter
 * Byte code compiler
