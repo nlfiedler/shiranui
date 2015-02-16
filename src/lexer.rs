@@ -1011,27 +1011,14 @@ mod test {
 
     use super::{lex, fold_case, replace_escapes, sanitize_input, TokenType};
     use std::collections::HashMap;
-    use std::fmt;
     use std::vec::Vec;
 
-    struct ExpectedResult { // TODO: replace this with a simple tuple
-        typ: TokenType,
-        val: String
-    }
-
-    impl fmt::Display for ExpectedResult {
-
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            write!(f, "ExpectedResult{{typ: {0}, val: {1}}}", self.typ, self.val)
-        }
-    }
-
-    fn verify_success(input: &str, expected: Vec<ExpectedResult>) {
+    fn verify_success(input: &str, expected: Vec<(TokenType, String)>) {
         let rx = lex("unit", input);
         for er in expected.iter() {
             if let Some(token) = rx.recv().ok() {
-                assert_eq!(token.typ, er.typ);
-                assert_eq!(token.val, er.val);
+                assert_eq!(token.typ, er.0);
+                assert_eq!(token.val, er.1);
             } else {
                 assert!(false, "ran out of tokens");
             }
@@ -1046,15 +1033,15 @@ mod test {
 
     /// `verify_singles` verifies individual expressions to check for
     /// special cases in the lexer.
-    fn verify_singles(inputs: HashMap<&str, ExpectedResult>) {
+    fn verify_singles(inputs: HashMap<&str, (TokenType, String)>) {
         for (input, er) in inputs.iter() {
             let rx = lex("verify_singles", input);
             if let Some(token) = rx.recv().ok() {
                 if token.typ == TokenType::Error {
                     panic!("lex failed for {} with {}", input, token.val);
                 }
-                assert_eq!(token.typ, er.typ);
-                assert_eq!(token.val, er.val);
+                assert_eq!(token.typ, er.0);
+                assert_eq!(token.val, er.1);
             } else {
                 assert!(false, "ran out of tokens");
             }
@@ -1124,8 +1111,8 @@ mod test {
     #[test]
     fn test_open_close_paren() {
         let mut vec = Vec::new();
-        vec.push(ExpectedResult{typ: TokenType::OpenParen, val: "(".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::CloseParen, val: ")".to_string()});
+        vec.push((TokenType::OpenParen, "(".to_string()));
+        vec.push((TokenType::CloseParen, ")".to_string()));
         verify_success("()", vec);
     }
 
@@ -1133,7 +1120,7 @@ mod test {
     fn test_quoted_string() {
         // valid inputs
         let mut vec = Vec::new();
-        vec.push(ExpectedResult{typ: TokenType::String, val: "\"foo\"".to_string()});
+        vec.push((TokenType::String, "\"foo\"".to_string()));
         verify_success("\"foo\"", vec);
         // TODO: test \a \b \t \n \r
         // TODO: test \" and \\
@@ -1168,24 +1155,24 @@ mod test {
     #[test]
     fn test_separators() {
         let mut vec = Vec::new();
-        vec.push(ExpectedResult{typ: TokenType::OpenParen, val: "(".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::CloseParen, val: ")".to_string()});
+        vec.push((TokenType::OpenParen, "(".to_string()));
+        vec.push((TokenType::CloseParen, ")".to_string()));
         verify_success("     (\n\t )\r\n", vec);
     }
 
     #[test]
     fn test_ignored_comments() {
         let mut vec = Vec::new();
-        vec.push(ExpectedResult{typ: TokenType::OpenParen, val: "(".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::CloseParen, val: ")".to_string()});
+        vec.push((TokenType::OpenParen, "(".to_string()));
+        vec.push((TokenType::CloseParen, ")".to_string()));
         verify_success(" ; foo \n   (\n ; bar \n )\n", vec);
     }
 
     #[test]
     fn test_block_comments() {
         let mut vec = Vec::new();
-        vec.push(ExpectedResult{typ: TokenType::OpenParen, val: "(".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::CloseParen, val: ")".to_string()});
+        vec.push((TokenType::OpenParen, "(".to_string()));
+        vec.push((TokenType::CloseParen, ")".to_string()));
         verify_success("#| outer #| nested |# outer |# ( #| bar |# )", vec);
         let mut map = HashMap::new();
         map.insert("#| foo", "unclosed block comment");
@@ -1195,10 +1182,10 @@ mod test {
     #[test]
     fn test_quotes() {
         let mut vec = Vec::new();
-        vec.push(ExpectedResult{typ: TokenType::Quote, val: ",".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Quote, val: ",@".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Quote, val: "'".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Quote, val: "`".to_string()});
+        vec.push((TokenType::Quote, ",".to_string()));
+        vec.push((TokenType::Quote, ",@".to_string()));
+        vec.push((TokenType::Quote, "'".to_string()));
+        vec.push((TokenType::Quote, "`".to_string()));
         verify_success(", ,@ ' `", vec);
         let mut map = HashMap::new();
         map.insert(",", "reached EOF in quote expression");
@@ -1208,10 +1195,10 @@ mod test {
     #[test]
     fn test_booleans() {
         let mut vec = Vec::new();
-        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#t".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#true".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#f".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#false".to_string()});
+        vec.push((TokenType::Boolean, "#t".to_string()));
+        vec.push((TokenType::Boolean, "#true".to_string()));
+        vec.push((TokenType::Boolean, "#f".to_string()));
+        vec.push((TokenType::Boolean, "#false".to_string()));
         verify_success("#t #true #f #false", vec);
         let mut map = HashMap::new();
         map.insert("#tree", "invalid boolean literal");
@@ -1222,21 +1209,21 @@ mod test {
     #[test]
     fn test_vectors() {
         let mut vec = Vec::new();
-        vec.push(ExpectedResult{typ: TokenType::Vector, val: "#(".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#t".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#f".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::CloseParen, val: ")".to_string()});
+        vec.push((TokenType::Vector, "#(".to_string()));
+        vec.push((TokenType::Boolean, "#t".to_string()));
+        vec.push((TokenType::Boolean, "#f".to_string()));
+        vec.push((TokenType::CloseParen, ")".to_string()));
         verify_success("#(#t #f)", vec);
     }
 
     #[test]
     fn test_byte_vectors() {
         let mut vec = Vec::new();
-        vec.push(ExpectedResult{typ: TokenType::ByteVector, val: "#u8(".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Integer, val: "32".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Integer, val: "64".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Integer, val: "128".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::CloseParen, val: ")".to_string()});
+        vec.push((TokenType::ByteVector, "#u8(".to_string()));
+        vec.push((TokenType::Integer, "32".to_string()));
+        vec.push((TokenType::Integer, "64".to_string()));
+        vec.push((TokenType::Integer, "128".to_string()));
+        vec.push((TokenType::CloseParen, ")".to_string()));
         verify_success("#u8(32 64 128)", vec);
         let mut map = HashMap::new();
         map.insert("#u ", "invalid byte vector expression");
@@ -1248,19 +1235,19 @@ mod test {
     #[test]
     fn test_comments() {
         let mut vec = Vec::new();
-        vec.push(ExpectedResult{typ: TokenType::Comment, val: "#;".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#t".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Comment, val: "#;".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#f".to_string()});
+        vec.push((TokenType::Comment, "#;".to_string()));
+        vec.push((TokenType::Boolean, "#t".to_string()));
+        vec.push((TokenType::Comment, "#;".to_string()));
+        vec.push((TokenType::Boolean, "#f".to_string()));
         verify_success("#;  #t #;#f", vec);
     }
 
     #[test]
     fn test_labels() {
         let mut vec = Vec::new();
-        vec.push(ExpectedResult{typ: TokenType::LabelDefinition, val: "#1=".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Boolean, val: "#t".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::LabelReference, val: "#1#".to_string()});
+        vec.push((TokenType::LabelDefinition, "#1=".to_string()));
+        vec.push((TokenType::Boolean, "#t".to_string()));
+        vec.push((TokenType::LabelReference, "#1#".to_string()));
         verify_success("#1=#t #1#", vec);
         let mut map = HashMap::new();
         map.insert("#1+", "invalid label expression");
@@ -1273,17 +1260,17 @@ mod test {
         let input = r#"#\a #\space #\newline #\t
         #\alarm #\backspace #\delete #\escape #\null #\return #\tab"#;
         let mut vec = Vec::new();
-        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\a".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\ ".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\n".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\t".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\x07".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\x08".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\x7f".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\x1b".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\0".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\r".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\t".to_string()});
+        vec.push((TokenType::Character, "#\\a".to_string()));
+        vec.push((TokenType::Character, "#\\ ".to_string()));
+        vec.push((TokenType::Character, "#\\\n".to_string()));
+        vec.push((TokenType::Character, "#\\t".to_string()));
+        vec.push((TokenType::Character, "#\\\x07".to_string()));
+        vec.push((TokenType::Character, "#\\\x08".to_string()));
+        vec.push((TokenType::Character, "#\\\x7f".to_string()));
+        vec.push((TokenType::Character, "#\\\x1b".to_string()));
+        vec.push((TokenType::Character, "#\\\0".to_string()));
+        vec.push((TokenType::Character, "#\\\r".to_string()));
+        vec.push((TokenType::Character, "#\\\t".to_string()));
         verify_success(input, vec);
         let mut map = HashMap::new();
         map.insert("#\\foo", "invalid character literal");
@@ -1295,15 +1282,15 @@ mod test {
     fn test_integers() {
         let inputs = r#"0 123 #d1234 #d#e1234 #o366 #i#o366 #x7b5 #b01010100 15##"#;
         let mut vec = Vec::new();
-        vec.push(ExpectedResult{typ: TokenType::Integer, val: "0".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Integer, val: "123".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Integer, val: "#d1234".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Integer, val: "#d#e1234".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Integer, val: "#o366".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Integer, val: "#i#o366".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Integer, val: "#x7b5".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Integer, val: "#b01010100".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Integer, val: "15##".to_string()});
+        vec.push((TokenType::Integer, "0".to_string()));
+        vec.push((TokenType::Integer, "123".to_string()));
+        vec.push((TokenType::Integer, "#d1234".to_string()));
+        vec.push((TokenType::Integer, "#d#e1234".to_string()));
+        vec.push((TokenType::Integer, "#o366".to_string()));
+        vec.push((TokenType::Integer, "#i#o366".to_string()));
+        vec.push((TokenType::Integer, "#x7b5".to_string()));
+        vec.push((TokenType::Integer, "#b01010100".to_string()));
+        vec.push((TokenType::Integer, "15##".to_string()));
         verify_success(inputs, vec);
     }
 
@@ -1311,18 +1298,18 @@ mod test {
     fn test_floats() {
         let inputs = r#".01 0.1 1.00 6e4 7.91e+16 3. 12#.### 1.2345e 1.2345s 1.2345f 1.2345d 1.2345l"#;
         let mut vec = Vec::new();
-        vec.push(ExpectedResult{typ: TokenType::Float, val: ".01".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Float, val: "0.1".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Float, val: "1.00".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Float, val: "6e4".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Float, val: "7.91e+16".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Float, val: "3.".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Float, val: "12#.###".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Float, val: "1.2345e".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Float, val: "1.2345s".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Float, val: "1.2345f".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Float, val: "1.2345d".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Float, val: "1.2345l".to_string()});
+        vec.push((TokenType::Float, ".01".to_string()));
+        vec.push((TokenType::Float, "0.1".to_string()));
+        vec.push((TokenType::Float, "1.00".to_string()));
+        vec.push((TokenType::Float, "6e4".to_string()));
+        vec.push((TokenType::Float, "7.91e+16".to_string()));
+        vec.push((TokenType::Float, "3.".to_string()));
+        vec.push((TokenType::Float, "12#.###".to_string()));
+        vec.push((TokenType::Float, "1.2345e".to_string()));
+        vec.push((TokenType::Float, "1.2345s".to_string()));
+        vec.push((TokenType::Float, "1.2345f".to_string()));
+        vec.push((TokenType::Float, "1.2345d".to_string()));
+        vec.push((TokenType::Float, "1.2345l".to_string()));
         verify_success(inputs, vec);
     }
 
@@ -1330,23 +1317,23 @@ mod test {
     fn test_complex() {
         let inputs = r#"3+4i 3.0+4.0i 3.0@4.0 3.0-4.0i -4.0i +4.0i 3.0-i 3.0+i -i +i"#;
         let mut vec = Vec::new();
-        vec.push(ExpectedResult{typ: TokenType::Complex, val: "3+4i".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Complex, val: "3.0+4.0i".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Complex, val: "3.0@4.0".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Complex, val: "3.0-4.0i".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Complex, val: "-4.0i".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Complex, val: "+4.0i".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Complex, val: "3.0-i".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Complex, val: "3.0+i".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Complex, val: "-i".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Complex, val: "+i".to_string()});
+        vec.push((TokenType::Complex, "3+4i".to_string()));
+        vec.push((TokenType::Complex, "3.0+4.0i".to_string()));
+        vec.push((TokenType::Complex, "3.0@4.0".to_string()));
+        vec.push((TokenType::Complex, "3.0-4.0i".to_string()));
+        vec.push((TokenType::Complex, "-4.0i".to_string()));
+        vec.push((TokenType::Complex, "+4.0i".to_string()));
+        vec.push((TokenType::Complex, "3.0-i".to_string()));
+        vec.push((TokenType::Complex, "3.0+i".to_string()));
+        vec.push((TokenType::Complex, "-i".to_string()));
+        vec.push((TokenType::Complex, "+i".to_string()));
         verify_success(inputs, vec);
         // TODO: test for <infnan> cases
         // let mut map = HashMap::new();
-        // map.insert("", ExpectedResult{typ: TokenType::Complex, val: "1+inf.0".to_string()});
-        // map.insert("", ExpectedResult{typ: TokenType::Complex, val: "1-inf.0".to_string()});
-        // map.insert("", ExpectedResult{typ: TokenType::Complex, val: "1+nan.0".to_string()});
-        // map.insert("", ExpectedResult{typ: TokenType::Complex, val: "1-nan.0".to_string()});
+        // map.insert("", (TokenType::Complex, "1+inf.0".to_string()));
+        // map.insert("", (TokenType::Complex, "1-inf.0".to_string()));
+        // map.insert("", (TokenType::Complex, "1+nan.0".to_string()));
+        // map.insert("", (TokenType::Complex, "1-nan.0".to_string()));
         // verify_singles(map);
         let mut map = HashMap::new();
         map.insert("3.0+4.0", "malformed complex");
@@ -1357,9 +1344,9 @@ mod test {
     fn test_rationals() {
         let inputs = r#"6/10 123/456 -6/12"#;
         let mut vec = Vec::new();
-        vec.push(ExpectedResult{typ: TokenType::Rational, val: "6/10".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Rational, val: "123/456".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Rational, val: "-6/12".to_string()});
+        vec.push((TokenType::Rational, "6/10".to_string()));
+        vec.push((TokenType::Rational, "123/456".to_string()));
+        vec.push((TokenType::Rational, "-6/12".to_string()));
         verify_success(inputs, vec);
     }
 
@@ -1400,59 +1387,59 @@ mod test {
     #[test]
     fn test_identifier_singles() {
         let mut map = HashMap::new();
-        map.insert("lambda", ExpectedResult{typ: TokenType::Identifier, val: "lambda".to_string()});
-        map.insert("q", ExpectedResult{typ: TokenType::Identifier, val: "q".to_string()});
-        map.insert("ab12", ExpectedResult{typ: TokenType::Identifier, val: "ab12".to_string()});
-        map.insert("+", ExpectedResult{typ: TokenType::Identifier, val: "+".to_string()});
-        map.insert("++", ExpectedResult{typ: TokenType::Identifier, val: "++".to_string()});
-        map.insert("+-", ExpectedResult{typ: TokenType::Identifier, val: "+-".to_string()});
-        map.insert("+@", ExpectedResult{typ: TokenType::Identifier, val: "+@".to_string()});
-        map.insert("-", ExpectedResult{typ: TokenType::Identifier, val: "-".to_string()});
-        map.insert("--", ExpectedResult{typ: TokenType::Identifier, val: "--".to_string()});
-        map.insert("-+", ExpectedResult{typ: TokenType::Identifier, val: "-+".to_string()});
-        map.insert("-@", ExpectedResult{typ: TokenType::Identifier, val: "-@".to_string()});
-        map.insert("+g", ExpectedResult{typ: TokenType::Identifier, val: "+g".to_string()});
-        map.insert("+.a", ExpectedResult{typ: TokenType::Identifier, val: "+.a".to_string()});
-        map.insert("+..a", ExpectedResult{typ: TokenType::Identifier, val: "+..a".to_string()});
-        map.insert("-g", ExpectedResult{typ: TokenType::Identifier, val: "-g".to_string()});
-        map.insert("-.a", ExpectedResult{typ: TokenType::Identifier, val: "-.a".to_string()});
-        map.insert("-..a", ExpectedResult{typ: TokenType::Identifier, val: "-..a".to_string()});
-        map.insert(".a", ExpectedResult{typ: TokenType::Identifier, val: ".a".to_string()});
-        map.insert("..a", ExpectedResult{typ: TokenType::Identifier, val: "..a".to_string()});
-        map.insert(".", ExpectedResult{typ: TokenType::Identifier, val: ".".to_string()});
-        map.insert("..", ExpectedResult{typ: TokenType::Identifier, val: "..".to_string()});
-        map.insert("...", ExpectedResult{typ: TokenType::Identifier, val: "...".to_string()});
-        map.insert("!", ExpectedResult{typ: TokenType::Identifier, val: "!".to_string()});
-        map.insert("$", ExpectedResult{typ: TokenType::Identifier, val: "$".to_string()});
-        map.insert("%", ExpectedResult{typ: TokenType::Identifier, val: "%".to_string()});
-        map.insert("&", ExpectedResult{typ: TokenType::Identifier, val: "&".to_string()});
-        map.insert("*", ExpectedResult{typ: TokenType::Identifier, val: "*".to_string()});
-        map.insert("/", ExpectedResult{typ: TokenType::Identifier, val: "/".to_string()});
-        map.insert(":", ExpectedResult{typ: TokenType::Identifier, val: ":".to_string()});
-        map.insert("<", ExpectedResult{typ: TokenType::Identifier, val: "<".to_string()});
-        map.insert("=", ExpectedResult{typ: TokenType::Identifier, val: "=".to_string()});
-        map.insert(">", ExpectedResult{typ: TokenType::Identifier, val: ">".to_string()});
-        map.insert("?", ExpectedResult{typ: TokenType::Identifier, val: "?".to_string()});
-        map.insert("^", ExpectedResult{typ: TokenType::Identifier, val: "^".to_string()});
-        map.insert("_", ExpectedResult{typ: TokenType::Identifier, val: "_".to_string()});
-        map.insert("~", ExpectedResult{typ: TokenType::Identifier, val: "~".to_string()});
-        map.insert("list->vector", ExpectedResult{typ: TokenType::Identifier, val: "list->vector".to_string()});
-        map.insert("+soup+", ExpectedResult{typ: TokenType::Identifier, val: "+soup+".to_string()});
-        map.insert("V17a", ExpectedResult{typ: TokenType::Identifier, val: "V17a".to_string()});
-        map.insert("<=?", ExpectedResult{typ: TokenType::Identifier, val: "<=?".to_string()});
-        map.insert("a34kTMNs", ExpectedResult{typ: TokenType::Identifier, val: "a34kTMNs".to_string()});
-        map.insert("|two words|", ExpectedResult{typ: TokenType::Identifier, val: "|two words|".to_string()});
-        map.insert("t-w-r-h-m-m", ExpectedResult{typ: TokenType::Identifier, val: "t-w-r-h-m-m".to_string()});
-        map.insert("||", ExpectedResult{typ: TokenType::Identifier, val: "||".to_string()});
-        map.insert("|foo @#$! bar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo @#$! bar|".to_string()});
-        map.insert("|foo\\abar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo\x07bar|".to_string()});
-        map.insert("|foo\\bbar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo\x08bar|".to_string()});
-        map.insert("|foo\\tbar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo\tbar|".to_string()});
-        map.insert("|foo\\nbar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo\nbar|".to_string()});
-        map.insert("|foo\\rbar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo\rbar|".to_string()});
-        map.insert("|foo\\|bar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo|bar|".to_string()});
-        map.insert("|foo\\x20;bar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo bar|".to_string()});
-        map.insert("|foo\\x20;\\x20;bar|", ExpectedResult{typ: TokenType::Identifier, val: "|foo  bar|".to_string()});
+        map.insert("lambda", (TokenType::Identifier, "lambda".to_string()));
+        map.insert("q", (TokenType::Identifier, "q".to_string()));
+        map.insert("ab12", (TokenType::Identifier, "ab12".to_string()));
+        map.insert("+", (TokenType::Identifier, "+".to_string()));
+        map.insert("++", (TokenType::Identifier, "++".to_string()));
+        map.insert("+-", (TokenType::Identifier, "+-".to_string()));
+        map.insert("+@", (TokenType::Identifier, "+@".to_string()));
+        map.insert("-", (TokenType::Identifier, "-".to_string()));
+        map.insert("--", (TokenType::Identifier, "--".to_string()));
+        map.insert("-+", (TokenType::Identifier, "-+".to_string()));
+        map.insert("-@", (TokenType::Identifier, "-@".to_string()));
+        map.insert("+g", (TokenType::Identifier, "+g".to_string()));
+        map.insert("+.a", (TokenType::Identifier, "+.a".to_string()));
+        map.insert("+..a", (TokenType::Identifier, "+..a".to_string()));
+        map.insert("-g", (TokenType::Identifier, "-g".to_string()));
+        map.insert("-.a", (TokenType::Identifier, "-.a".to_string()));
+        map.insert("-..a", (TokenType::Identifier, "-..a".to_string()));
+        map.insert(".a", (TokenType::Identifier, ".a".to_string()));
+        map.insert("..a", (TokenType::Identifier, "..a".to_string()));
+        map.insert(".", (TokenType::Identifier, ".".to_string()));
+        map.insert("..", (TokenType::Identifier, "..".to_string()));
+        map.insert("...", (TokenType::Identifier, "...".to_string()));
+        map.insert("!", (TokenType::Identifier, "!".to_string()));
+        map.insert("$", (TokenType::Identifier, "$".to_string()));
+        map.insert("%", (TokenType::Identifier, "%".to_string()));
+        map.insert("&", (TokenType::Identifier, "&".to_string()));
+        map.insert("*", (TokenType::Identifier, "*".to_string()));
+        map.insert("/", (TokenType::Identifier, "/".to_string()));
+        map.insert(":", (TokenType::Identifier, ":".to_string()));
+        map.insert("<", (TokenType::Identifier, "<".to_string()));
+        map.insert("=", (TokenType::Identifier, "=".to_string()));
+        map.insert(">", (TokenType::Identifier, ">".to_string()));
+        map.insert("?", (TokenType::Identifier, "?".to_string()));
+        map.insert("^", (TokenType::Identifier, "^".to_string()));
+        map.insert("_", (TokenType::Identifier, "_".to_string()));
+        map.insert("~", (TokenType::Identifier, "~".to_string()));
+        map.insert("list->vector", (TokenType::Identifier, "list->vector".to_string()));
+        map.insert("+soup+", (TokenType::Identifier, "+soup+".to_string()));
+        map.insert("V17a", (TokenType::Identifier, "V17a".to_string()));
+        map.insert("<=?", (TokenType::Identifier, "<=?".to_string()));
+        map.insert("a34kTMNs", (TokenType::Identifier, "a34kTMNs".to_string()));
+        map.insert("|two words|", (TokenType::Identifier, "|two words|".to_string()));
+        map.insert("t-w-r-h-m-m", (TokenType::Identifier, "t-w-r-h-m-m".to_string()));
+        map.insert("||", (TokenType::Identifier, "||".to_string()));
+        map.insert("|foo @#$! bar|", (TokenType::Identifier, "|foo @#$! bar|".to_string()));
+        map.insert("|foo\\abar|", (TokenType::Identifier, "|foo\x07bar|".to_string()));
+        map.insert("|foo\\bbar|", (TokenType::Identifier, "|foo\x08bar|".to_string()));
+        map.insert("|foo\\tbar|", (TokenType::Identifier, "|foo\tbar|".to_string()));
+        map.insert("|foo\\nbar|", (TokenType::Identifier, "|foo\nbar|".to_string()));
+        map.insert("|foo\\rbar|", (TokenType::Identifier, "|foo\rbar|".to_string()));
+        map.insert("|foo\\|bar|", (TokenType::Identifier, "|foo|bar|".to_string()));
+        map.insert("|foo\\x20;bar|", (TokenType::Identifier, "|foo bar|".to_string()));
+        map.insert("|foo\\x20;\\x20;bar|", (TokenType::Identifier, "|foo  bar|".to_string()));
         verify_singles(map);
     }
 
@@ -1492,10 +1479,10 @@ mod test {
         #!no-fold-case
         #\newline"#;
         let mut vec = Vec::new();
-        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\n".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\n".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\n".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Character, val: "#\\\n".to_string()});
+        vec.push((TokenType::Character, "#\\\n".to_string()));
+        vec.push((TokenType::Character, "#\\\n".to_string()));
+        vec.push((TokenType::Character, "#\\\n".to_string()));
+        vec.push((TokenType::Character, "#\\\n".to_string()));
         verify_success(input, vec);
     }
 
@@ -1509,10 +1496,10 @@ mod test {
         #!no-fold-case
         lamBDA"#;
         let mut vec = Vec::new();
-        vec.push(ExpectedResult{typ: TokenType::Identifier, val: "lambda".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Identifier, val: "lAMbdA".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Identifier, val: "lambda".to_string()});
-        vec.push(ExpectedResult{typ: TokenType::Identifier, val: "lamBDA".to_string()});
+        vec.push((TokenType::Identifier, "lambda".to_string()));
+        vec.push((TokenType::Identifier, "lAMbdA".to_string()));
+        vec.push((TokenType::Identifier, "lambda".to_string()));
+        vec.push((TokenType::Identifier, "lamBDA".to_string()));
         verify_success(input, vec);
     }
 
