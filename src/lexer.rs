@@ -158,7 +158,6 @@ impl<'a> Lexer<'a> {
 
     /// emit_text passes the given token back to the client via the channel.
     fn emit_text(&mut self, t: TokenType, text: &str) {
-        // TODO: duplicate code in emit, can it be helped? borrowing error if emit calls emit_text
         let _ = self.chan.send(Token {
             typ: t,
             val: text.to_string(),
@@ -243,6 +242,22 @@ impl<'a> Lexer<'a> {
             let next = self.input.char_range_at(self.pos);
             Some(next.ch)
         }
+    }
+
+    /// `look_ahead` returns true if the next characters in the input
+    /// text match the given query.
+    fn look_ahead(&mut self, query: &str, folding: bool) -> bool {
+        let q_len = query.len();
+        if self.input.len() - self.pos >= q_len {
+            let text = self.input.as_slice().slice(self.pos, self.pos + q_len);
+            return if folding {
+                let lower_text = fold_case(text);
+                lower_text.as_slice() == query
+            } else {
+                text == query
+            }
+        }
+        false
     }
 
     /// `ignore` skips over the pending input before this point.
@@ -397,10 +412,15 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
             '\'' | '`' | ',' => {
                 return Some(StateFn(lex_quote));
             },
-            '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' => {
-                // let lex_number sort out what type of number it is
+            '0' ... '9' => {
                 l.backup();
                 return Some(StateFn(lex_number));
+            },
+            '+' | '-' => {
+                return Some(StateFn(lex_explicit_sign));
+            },
+            '.' => {
+                return Some(StateFn(lex_dot));
             },
             '@' => {
                 return errorf(l, "@ cannot be the start of a token");
@@ -412,7 +432,7 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
                 return Some(StateFn(lex_pipe_identifier));
             },
             _ => {
-                // let lex_identifier sort out what exactly this is
+                // almost certainly an identifier
                 l.backup();
                 return Some(StateFn(lex_identifier));
             }
@@ -771,8 +791,31 @@ impl NumberLexer {
 
     /// `accept_real_r` attempts to read an optionally signed real number.
     fn accept_real_r(&mut self, l: &mut Lexer, tentative: bool) -> Result<u8, &'static str> {
-        l.accept("+-");
-        self.accept_ureal_r(l, tentative)
+        if l.look_ahead("inf.0", true) || l.look_ahead("nan.0", true) {
+            // consume the text
+            l.next();
+            l.next();
+            l.next();
+            l.next();
+            l.next();
+            Ok(0)
+        } else {
+            l.accept("+-");
+            self.accept_ureal_r(l, tentative)
+        }
+    }
+
+    /// `accept_infnan` checks for the "inf.0" and "nan.0" cases.
+    fn accept_infnan(&mut self, l: &mut Lexer) -> Result<u8, &'static str> {
+        if l.look_ahead("inf.0", true) || l.look_ahead("nan.0", true) {
+            // consume the text
+            l.next();
+            l.next();
+            l.next();
+            l.next();
+            l.next();
+        }
+        Ok(0)
     }
 }
 
@@ -811,6 +854,10 @@ fn lex_number(l: &mut Lexer) -> Option<StateFn> {
             return errorf(l, "malformed complex")
         }
     }
+    let infnan_result = nl.accept_infnan(l);
+    if infnan_result.is_err() {
+        return errorf(l, infnan_result.unwrap_err());
+    }
     if l.accept("iI") {
         nl.is_complex = true;
     }
@@ -833,57 +880,76 @@ fn lex_number(l: &mut Lexer) -> Option<StateFn> {
     Some(StateFn(lex_start))
 }
 
-/// `lex_identifier` processes the text at the current location as if it were
-/// an identifier, but may turn out to be a numeric literal instead.
-fn lex_identifier(l: &mut Lexer) -> Option<StateFn> {
-    let mut ident = String::new();
-    // TODO: this needs to move to lex_start and be handled specially
-    // check for special situations, such as the start of a number
-    // (R7RS 2.1, 2.3, 4.1.4, 7.1.1)
-    if let Some(ch) = l.next() {
-        if ch == '.' {
-            if let Some(ch) = l.peek() {
-                if ch.is_digit(10) {
-                    // since we have a decimal point, the number must be base 10
-                    l.rewind();
-                    return Some(StateFn(lex_number));
-                }
-            }
+/// `lex_dot` decides what should be done with the dot (.) that the
+/// lexer just encountered (could be an identifier or a number).
+fn lex_dot(l: &mut Lexer) -> Option<StateFn> {
+    if let Some(ch) = l.peek() {
+        // a dot followed by dot subsequent is an identifier
+        if is_dot_subsequent(ch) {
+            l.rewind();
+            return Some(StateFn(lex_identifier));
+        }
+        // everything else must be a number
+        l.rewind();
+        return Some(StateFn(lex_number));
+    }
+    // and if we ran out of tokens, it's an identifier
+    l.rewind();
+    return Some(StateFn(lex_identifier));
+}
 
-        } else if ch == '+' || ch == '-' {
-            // +/- may be the start of a number or an identifier
+/// `lex_explicit_sign` decides what should be done with the explicit sign
+/// that the lexer just encountered (could be identifier or a number).
+fn lex_explicit_sign(l: &mut Lexer) -> Option<StateFn> {
+    if let Some(ch) = l.peek() {
+        if ch == 'i' || ch == 'I' || l.look_ahead("inf.0", true) || l.look_ahead("nan.0", true) {
+            // these are ambiguous, but since 7.1.1 explicitly names
+            // them as numbers, despite fitting the identifier pattern,
+            // treat them as numbers
+            l.rewind();
+            return Some(StateFn(lex_number));
+        }
+        if is_sign_subsequent(ch) {
+            l.rewind();
+            return Some(StateFn(lex_identifier));
+        } else if ch == '.' {
+            l.next();
             if let Some(ch) = l.peek() {
-                // TODO: needs to be smarter here, could be +inf.0, -inf.0, +nan.0, -nan.0, #x, etc.
-                if ch.is_digit(10) || ch == 'i' || ch == 'I' {
+                if is_dot_subsequent(ch) {
                     l.rewind();
-                    return Some(StateFn(lex_number));
+                    return Some(StateFn(lex_identifier));
                 }
+            } else {
+                // if we ran out of tokens, it's an identifier
+                l.rewind();
+                return Some(StateFn(lex_identifier));
             }
         }
-
-        // in all other cases, this is the start of an identifier
-        ident.push(ch);
+        // everything else must be a number
+        l.rewind();
+        return Some(StateFn(lex_number));
     }
+    // if we ran out of tokens, it's an identifier
+    l.rewind();
+    return Some(StateFn(lex_identifier));
+}
 
-    // TODO: enforce <initial>: <letter> | <special initial>
-    // TODO: <special initial>: '!' | '$' | '%' | '&' | '*' | '/' | ':' | '<' | '=' | '>' | '?' | '^' | '_' | '~'
-    // TODO: enforce <subsequent>: <initial> | <digit> | <special subsequent>
-    // TODO: enforce <peculiar identifier>
-
-    // average case identifier that may contain \x escapes
+/// `lex_identifier` processes the text as an identifier.
+fn lex_identifier(l: &mut Lexer) -> Option<StateFn> {
+    // If we reached this function, we have determined that the input
+    // cannot be anything but an identifier, and we simply proceed with
+    // that understanding.
+    let mut ident = String::new();
     while let Some(ch) = l.next() {
-        // check for the end of the identifier (note that these are assumed
-        // to not appear as the first character, as lex_start would have
-        // sent control to some other state function)
-        if "'\",`;() \t\n\r".contains_char(ch) {
+        // These conditions cover the "peculiar identifier", and "initial"
+        // and "special initial" are buried in here, as well.
+        if is_explicit_sign(ch) || is_subsequent(ch) ||
+                is_sign_subsequent(ch) || is_dot_subsequent(ch) {
+            ident.push(ch);
+        } else {
             l.backup();
             break;
         }
-        // identifiers are letters, numbers, and extended characters (R7RS 2.1)
-        if !ch.is_alphanumeric() && !"!$%&*+-./:<=>?@^_~".contains_char(ch) {
-            return errorf(l, "invalid subsequent identifier character");
-        }
-        ident.push(ch);
     }
     l.emit_identifier(Some(ident.as_slice()));
     return Some(StateFn(lex_start));
@@ -891,7 +957,7 @@ fn lex_identifier(l: &mut Lexer) -> Option<StateFn> {
 
 /// `lex_pipe_identifier` expects the first character to be a vertical
 /// bar (|) and scans the text until it finds an unescaped vertical bar.
-/// The text inbetween may contains inline hex escapes and mnemonic escapes.
+/// The text inbetween may contain inline hex escapes and mnemonic escapes.
 fn lex_pipe_identifier(l: &mut Lexer) -> Option<StateFn> {
     let mut ident = String::new();
     ident.push('|');
@@ -935,6 +1001,48 @@ fn lex_pipe_identifier(l: &mut Lexer) -> Option<StateFn> {
         }
     }
     return errorf(l, "reached EOF in |identifier| expression");
+}
+
+/// `is_initial` returns true if `ch` is an initial identifier character.
+#[inline]
+fn is_initial(ch: char) -> bool {
+    ch.is_alphabetic() || is_special_initial(ch)
+}
+
+/// `is_special_initial` returns true if `ch` is a special subsequent for identifiers.
+#[inline]
+fn is_special_initial(ch: char) -> bool {
+    "!$%&*/:<=>?^_~".contains_char(ch)
+}
+
+/// `is_subsequent` returns true if `ch` is a subsequent identifier character.
+#[inline]
+fn is_subsequent(ch: char) -> bool {
+    is_initial(ch) || ch.is_digit(10) || is_special_subsequent(ch)
+}
+
+/// `is_explicit_sign` returns true if ch is a plus (+) or minus (-) sign.
+#[inline]
+fn is_explicit_sign(ch: char) -> bool {
+    ch == '+' || ch == '-'
+}
+
+/// `is_special_subsequent` returns true if `ch` is a special subsequent identifier character.
+#[inline]
+fn is_special_subsequent(ch: char) -> bool {
+    is_explicit_sign(ch) || ch == '.' || ch == '@'
+}
+
+/// `is_dot_subsequent` returns true if `ch` is a dot subsequent for identifiers.
+#[inline]
+fn is_dot_subsequent(ch: char) -> bool {
+    is_sign_subsequent(ch) ||  ch == '.'
+}
+
+/// `is_sign_subsequent` returns true if `ch` is a sign subsequent for identifiers.
+#[inline]
+fn is_sign_subsequent(ch: char) -> bool {
+    is_initial(ch) || is_explicit_sign(ch) || ch == '@'
 }
 
 /// `sanitize_input` prepares the input program for lexing, which basically
@@ -1090,6 +1198,11 @@ mod test {
         assert_eq!(replace_escapes("foo bar baz quux").unwrap(), "foo bar baz quux".to_string());
         assert_eq!(replace_escapes("foo\\x20;quux").unwrap(), "foo quux".to_string());
         assert_eq!(replace_escapes("\\x65e5;\\x672c;\\x8a9e;").unwrap(), "日本語".to_string());
+        assert_eq!(replace_escapes("\\a").unwrap(), "\x07".to_string());
+        assert_eq!(replace_escapes("\\b").unwrap(), "\x08".to_string());
+        assert_eq!(replace_escapes("\\t").unwrap(), "\t".to_string());
+        assert_eq!(replace_escapes("\\n").unwrap(), "\n".to_string());
+        assert_eq!(replace_escapes("\\r").unwrap(), "\r".to_string());
         // error cases
         assert_eq!(replace_escapes("\\f").unwrap_err(), "expected x|a|b|t|n|r after \\ in escape sequence");
         assert_eq!(replace_escapes("\\xAB").unwrap_err(), "missing ; after \\x escape sequence");
@@ -1454,18 +1567,6 @@ mod test {
         map.insert("|a\\xD801;|", "invalid UTF code point");
         map.insert("|f\\q|", "bare \\ prohibited in |identifier|");
         map.insert("|foo", "reached EOF in |identifier| expression");
-        map.insert("foo#", "invalid subsequent identifier character");
-        map.insert("foo|", "invalid subsequent identifier character");
-        // TODO: i am not convinced this is correct, see R7RS 7.1.1
-        // if "'\",`;() \t\n\r".contains_char(ch) {
-        // map.insert("foo'", "invalid subsequent identifier character");
-        // map.insert("foo,", "invalid subsequent identifier character");
-        // map.insert("foo`", "invalid subsequent identifier character");
-        // map.insert("foo;", "invalid subsequent identifier character");
-        map.insert("foo[", "invalid subsequent identifier character");
-        map.insert("foo]", "invalid subsequent identifier character");
-        map.insert("foo{", "invalid subsequent identifier character");
-        map.insert("foo}", "invalid subsequent identifier character");
         verify_errors(map);
     }
 
