@@ -159,20 +159,33 @@ impl<'a> Lexer<'a> {
     /// `emit_escaped` calls `replace_escapes()` on the current token text
     /// and emits that as the given token type, returning the result of the
     /// `replace_escapes()`, which may indicate an error.
-    fn emit_escaped(&mut self, t: TokenType) -> Result<u8, &'static str> {
+    // fn emit_escaped(&mut self, t: TokenType) -> Result<u8, &'static str> {
+    //     let text = self.input.as_slice().slice(self.start, self.pos);
+    //     let result = replace_escapes(text);
+    //     if result.is_ok() {
+    //         let _ = self.chan.send(Token {
+    //             typ: t,
+    //             val: result.unwrap(),
+    //             row: self.row,
+    //             col: self.col
+    //         });
+    //         self.start = self.pos;
+    //         return Ok(0)
+    //     }
+    //     Err(result.unwrap_err())
+    // }
+
+    /// `emit_folded` will fold the case of the token and then emit the
+    /// identifier to the token channel.
+    fn emit_folded(&mut self, t: TokenType) {
         let text = self.input.as_slice().slice(self.start, self.pos);
-        let result = replace_escapes(text);
-        if result.is_ok() {
-            let _ = self.chan.send(Token {
-                typ: t,
-                val: result.unwrap(),
-                row: self.row,
-                col: self.col
-            });
-            self.start = self.pos;
-            return Ok(0)
-        }
-        Err(result.unwrap_err())
+        let _ = self.chan.send(Token {
+            typ: t,
+            val: fold_case(text),
+            row: self.row,
+            col: self.col
+        });
+        self.start = self.pos
     }
 
     /// emit_text passes the given token back to the client via the channel.
@@ -688,23 +701,23 @@ fn lex_character(l: &mut Lexer) -> Option<StateFn> {
     }
     let folding = l.folding;
     if l.token_matches("#\\newline", folding) {
-        l.emit(TokenType::Character);
+        l.emit_folded(TokenType::Character);
     } else if l.token_matches("#\\space", folding) {
-        l.emit(TokenType::Character);
+        l.emit_folded(TokenType::Character);
     } else if l.token_matches("#\\alarm", folding) {
-        l.emit(TokenType::Character);
+        l.emit_folded(TokenType::Character);
     } else if l.token_matches("#\\backspace", folding) {
-        l.emit(TokenType::Character);
+        l.emit_folded(TokenType::Character);
     } else if l.token_matches("#\\delete", folding) {
-        l.emit(TokenType::Character);
+        l.emit_folded(TokenType::Character);
     } else if l.token_matches("#\\escape", folding) {
-        l.emit(TokenType::Character);
+        l.emit_folded(TokenType::Character);
     } else if l.token_matches("#\\null", folding) {
-        l.emit(TokenType::Character);
+        l.emit_folded(TokenType::Character);
     } else if l.token_matches("#\\return", folding) {
-        l.emit(TokenType::Character);
+        l.emit_folded(TokenType::Character);
     } else if l.token_matches("#\\tab", folding) {
-        l.emit(TokenType::Character);
+        l.emit_folded(TokenType::Character);
     } else {
         // assert that it is a single character (e.g. #\a)
         let prev = l.input.char_range_at_reverse(l.pos);
@@ -714,7 +727,7 @@ fn lex_character(l: &mut Lexer) -> Option<StateFn> {
         if let Some(ch) = l.peek() {
             if !is_delimiter(ch) {
                 l.next();
-                return errorf(l, "invalid character literal")
+                return errorf(l, "invalid character literal");
             }
         }
         l.emit(TokenType::Character);
@@ -733,7 +746,7 @@ fn lex_quote(l: &mut Lexer) -> Option<StateFn> {
                 l.next();
             }
         } else {
-            return errorf(l, "reached EOF in quote expression")
+            return errorf(l, "reached EOF in quote expression");
         }
     }
     l.emit(TokenType::Quote);
@@ -1673,10 +1686,10 @@ mod test {
         #!no-fold-case
         #\newline"#;
         let mut vec = Vec::new();
-        vec.push((TokenType::Character, "#\\\n".to_string()));
-        vec.push((TokenType::Character, "#\\\n".to_string()));
-        vec.push((TokenType::Character, "#\\\n".to_string()));
-        vec.push((TokenType::Character, "#\\\n".to_string()));
+        vec.push((TokenType::Character, "#\\newline".to_string()));
+        vec.push((TokenType::Character, "#\\newline".to_string()));
+        vec.push((TokenType::Character, "#\\newline".to_string()));
+        vec.push((TokenType::Character, "#\\newline".to_string()));
         verify_success(input, vec);
     }
 
