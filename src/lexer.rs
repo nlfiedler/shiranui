@@ -1028,9 +1028,11 @@ fn lex_identifier(l: &mut Lexer) -> Option<StateFn> {
         if is_explicit_sign(ch) || is_subsequent(ch) ||
                 is_sign_subsequent(ch) || is_dot_subsequent(ch) {
             ident.push(ch);
-        } else {
+        } else if is_delimiter(ch) {
             l.backup();
             break;
+        } else {
+            return errorf(l, "improperly terminated identifier");
         }
     }
     l.emit_identifier(Some(ident.as_slice()));
@@ -1673,6 +1675,7 @@ mod test {
         map.insert("|a\\xD801;|", "invalid UTF code point");
         map.insert("|f\\q|", "expected x|a|b|t|n|r after \\ in escape sequence");
         map.insert("|foo", "reached EOF in |identifier| expression");
+        map.insert("abc]", "improperly terminated identifier");
         verify_errors(map);
     }
 
