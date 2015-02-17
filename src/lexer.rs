@@ -792,6 +792,7 @@ impl NumberLexer {
     /// `accept_real_r` attempts to read an optionally signed real number.
     fn accept_real_r(&mut self, l: &mut Lexer, tentative: bool) -> Result<u8, &'static str> {
         if l.look_ahead("inf.0", true) || l.look_ahead("nan.0", true) {
+            self.is_float = true;
             // consume the text
             l.next();
             l.next();
@@ -808,6 +809,7 @@ impl NumberLexer {
     /// `accept_infnan` checks for the "inf.0" and "nan.0" cases.
     fn accept_infnan(&mut self, l: &mut Lexer) -> Result<u8, &'static str> {
         if l.look_ahead("inf.0", true) || l.look_ahead("nan.0", true) {
+            self.is_float = true;
             // consume the text
             l.next();
             l.next();
@@ -850,6 +852,10 @@ fn lex_number(l: &mut Lexer) -> Option<StateFn> {
         if ureal_result.is_err() {
             return errorf(l, ureal_result.unwrap_err());
         }
+        let infnan_result = nl.accept_infnan(l);
+        if infnan_result.is_err() {
+            return errorf(l, infnan_result.unwrap_err());
+        }
         if !l.accept("iI") {
             return errorf(l, "malformed complex")
         }
@@ -862,9 +868,10 @@ fn lex_number(l: &mut Lexer) -> Option<StateFn> {
         nl.is_complex = true;
     }
 
-    // Next thing must _not_ be alphanumeric.
+    // Next character must not be alphanumeric or related to numbers in any
+    // way ('.', '+', '-', '@'), which happens to be "special subsequent".
     if let Some(ch) = l.peek() {
-        if ch.is_alphanumeric() {
+        if ch.is_alphanumeric() || is_special_subsequent(ch) {
             return errorf(l, "malformed number suffix")
         }
     }
@@ -979,7 +986,7 @@ fn lex_pipe_identifier(l: &mut Lexer) -> Option<StateFn> {
                     },
                     // everything else is wrong
                     _ => {
-                        return errorf(l, "bare \\ prohibited in |identifier|");
+                        return errorf(l, "expected x|a|b|t|n|r after \\ in escape sequence");
                     }
                 }
             } else {
@@ -1424,6 +1431,12 @@ mod test {
         vec.push((TokenType::Float, "1.2345d".to_string()));
         vec.push((TokenType::Float, "1.2345l".to_string()));
         verify_success(inputs, vec);
+        let mut singles = HashMap::new();
+        singles.insert("+inf.0", (TokenType::Float, "+inf.0".to_string()));
+        singles.insert("-inf.0", (TokenType::Float, "-inf.0".to_string()));
+        singles.insert("+nan.0", (TokenType::Float, "+nan.0".to_string()));
+        singles.insert("-nan.0", (TokenType::Float, "-nan.0".to_string()));
+        verify_singles(singles);
     }
 
     #[test]
@@ -1441,16 +1454,21 @@ mod test {
         vec.push((TokenType::Complex, "-i".to_string()));
         vec.push((TokenType::Complex, "+i".to_string()));
         verify_success(inputs, vec);
-        // TODO: test for <infnan> cases
-        // let mut map = HashMap::new();
-        // map.insert("", (TokenType::Complex, "1+inf.0".to_string()));
-        // map.insert("", (TokenType::Complex, "1-inf.0".to_string()));
-        // map.insert("", (TokenType::Complex, "1+nan.0".to_string()));
-        // map.insert("", (TokenType::Complex, "1-nan.0".to_string()));
-        // verify_singles(map);
-        let mut map = HashMap::new();
-        map.insert("3.0+4.0", "malformed complex");
-        verify_errors(map);
+        let mut singles = HashMap::new();
+        // <infnan> i
+        singles.insert("+inf.0i", (TokenType::Complex, "+inf.0i".to_string()));
+        singles.insert("-inf.0i", (TokenType::Complex, "-inf.0i".to_string()));
+        singles.insert("+nan.0i", (TokenType::Complex, "+nan.0i".to_string()));
+        singles.insert("-nan.0i", (TokenType::Complex, "-nan.0i".to_string()));
+        // <real R> <infnan> i
+        singles.insert("1+inf.0i", (TokenType::Complex, "1+inf.0i".to_string()));
+        singles.insert("1-inf.0i", (TokenType::Complex, "1-inf.0i".to_string()));
+        singles.insert("1+nan.0i", (TokenType::Complex, "1+nan.0i".to_string()));
+        singles.insert("1-nan.0i", (TokenType::Complex, "1-nan.0i".to_string()));
+        verify_singles(singles);
+        let mut errors = HashMap::new();
+        errors.insert("3.0+4.0", "malformed complex");
+        verify_errors(errors);
     }
 
     #[test]
@@ -1467,8 +1485,10 @@ mod test {
     fn test_bad_numbers() {
         let mut map = HashMap::new();
         map.insert("0.a", "malformed number suffix");
-        // TODO: weird case, returns as TokenType::Float "0.0"
-        // map.insert("0.0.0", "something wrong");
+        map.insert("0.0.0", "malformed number suffix");
+        map.insert("0.0+0i+", "malformed number suffix");
+        map.insert("0.0-0i-", "malformed number suffix");
+        map.insert("0.0@0@", "malformed number suffix");
         map.insert("0a", "malformed number suffix");
         map.insert("#dabc", "malformed number suffix");
         map.insert("#o888", "malformed number suffix");
@@ -1559,13 +1579,11 @@ mod test {
     #[test]
     fn test_identifier_errors() {
         let mut map = HashMap::new();
-        // TODO: why are these not errors?
-        // map.insert("|a\\p123|", "expected 'x' after '\\' in identifier");
-        // map.insert("|a\\xFF|", "missing ; after \\x escape in identifier");
-        // map.insert("|a\\xXYZ;|", "invalid hex escape in identifier");
-        // map.insert("|a\\z|", "expected escape code in identifier");
+        map.insert("|a\\p123|", "expected x|a|b|t|n|r after \\ in escape sequence");
+        map.insert("|a\\xFF|", "missing ; after \\x escape sequence");
+        map.insert("|a\\xXYZ;|", "invalid hexadecimal escape code");
         map.insert("|a\\xD801;|", "invalid UTF code point");
-        map.insert("|f\\q|", "bare \\ prohibited in |identifier|");
+        map.insert("|f\\q|", "expected x|a|b|t|n|r after \\ in escape sequence");
         map.insert("|foo", "reached EOF in |identifier| expression");
         verify_errors(map);
     }
