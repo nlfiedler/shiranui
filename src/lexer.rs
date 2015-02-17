@@ -153,7 +153,26 @@ impl<'a> Lexer<'a> {
             row: self.row,
             col: self.col
         });
-        self.start = self.pos
+        self.start = self.pos;
+    }
+
+    /// `emit_escaped` calls `replace_escapes()` on the current token text
+    /// and emits that as the given token type, returning the result of the
+    /// `replace_escapes()`, which may indicate an error.
+    fn emit_escaped(&mut self, t: TokenType) -> Result<u8, &'static str> {
+        let text = self.input.as_slice().slice(self.start, self.pos);
+        let result = replace_escapes(text);
+        if result.is_ok() {
+            let _ = self.chan.send(Token {
+                typ: t,
+                val: result.unwrap(),
+                row: self.row,
+                col: self.col
+            });
+            self.start = self.pos;
+            return Ok(0)
+        }
+        Err(result.unwrap_err())
     }
 
     /// emit_text passes the given token back to the client via the channel.
@@ -164,7 +183,7 @@ impl<'a> Lexer<'a> {
             row: self.row,
             col: self.col
         });
-        self.start = self.pos
+        self.start = self.pos;
     }
 
     /// `emit_identifier` will fold the case of the identifier if the #!fold-case
@@ -545,6 +564,7 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
                         !l.token_matches("#false", false) {
                     return errorf(l, "invalid boolean literal");
                 }
+                // TODO: check that the next character is a "delimiter"
                 l.emit(TokenType::Boolean);
                 return Some(StateFn(lex_start));
             },
@@ -601,6 +621,13 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
                 return Some(StateFn(lex_start));
             },
             '\\' => {
+                if let Some(ch) = l.peek() {
+                    if ch == 'x' {
+                        return Some(StateFn(lex_x_character));
+                    }
+                } else {
+                    return errorf(l, "reached EOF in character literal")
+                }
                 return Some(StateFn(lex_character));
             },
             'b' | 'd' | 'e' | 'i' | 'o' | 'x' => {
@@ -616,9 +643,38 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
     unreachable!();
 }
 
+/// `lex_x_character` determines if the #\x is just a single letter or
+/// a hex scalar value (\xNNNN) and processes accordingly.
+fn lex_x_character(l: &mut Lexer) -> Option<StateFn> {
+    // consume the 'x' itself
+    l.next();
+    if let Some(ch) = l.peek() {
+        if is_delimiter(ch) {
+            // it is just the letter x
+            l.emit(TokenType::Character);
+        } else {
+            // read characters until the required delimiter is found
+            let mut text = String::new();
+            text.push('#');
+            text.push('\\');
+            text.push('x');
+            while let Some(ch) = l.next() {
+                if is_delimiter(ch) {
+                    l.backup();
+                    break;
+                } else {
+                    text.push(ch);
+                }
+            }
+            // as with numeric literals, some validation happens at parse time
+            l.emit_text(TokenType::Character, text.as_slice());
+        }
+    }
+    Some(StateFn(lex_start))
+}
+
 /// `lex_character` processes a character literal.
 fn lex_character(l: &mut Lexer) -> Option<StateFn> {
-    // TODO: check for \xNNNN; <inline hex escape>
     // check for one of the many special character names
     if l.folding {
         l.accept_run("abcdeiklmnoprstuwABCDEIKLMNOPRSTUW");
@@ -626,6 +682,8 @@ fn lex_character(l: &mut Lexer) -> Option<StateFn> {
         l.accept_run("abcdeiklmnoprstuw");
     }
     let folding = l.folding;
+    // TODO: change these to simply emit the token as it was found, like numbers
+    // TODO: write a Character::from_str() that converts char literals to a single character
     if l.token_matches("#\\newline", folding) {
         l.emit_text(TokenType::Character, "#\\\n");
     } else if l.token_matches("#\\space", folding) {
@@ -651,6 +709,7 @@ fn lex_character(l: &mut Lexer) -> Option<StateFn> {
             return errorf(l, "invalid character literal");
         }
         if let Some(ch) = l.peek() {
+            // TODO: check that ch is a "delimiter"
             if ch.is_alphabetic() {
                 l.next();
                 return errorf(l, "invalid character literal")
@@ -871,6 +930,7 @@ fn lex_number(l: &mut Lexer) -> Option<StateFn> {
     // Next character must not be alphanumeric or related to numbers in any
     // way ('.', '+', '-', '@'), which happens to be "special subsequent".
     if let Some(ch) = l.peek() {
+        // TODO: check that ch is a "delimiter"
         if ch.is_alphanumeric() || is_special_subsequent(ch) {
             return errorf(l, "malformed number suffix")
         }
@@ -1008,6 +1068,14 @@ fn lex_pipe_identifier(l: &mut Lexer) -> Option<StateFn> {
         }
     }
     return errorf(l, "reached EOF in |identifier| expression");
+}
+
+/// `is_delimiter` returns true if `ch` is a delimiter character.
+fn is_delimiter(ch: char) -> bool {
+    match ch {
+        ' ' | '\t' | '\r' | '\n' | '|' | '(' | ')' | '"' | ';' => true,
+        _ => false
+    }
 }
 
 /// `is_initial` returns true if `ch` is an initial identifier character.
@@ -1377,13 +1445,16 @@ mod test {
 
     #[test]
     fn test_characters() {
-        let input = r#"#\a #\space #\newline #\t
+        let input = r#"#\a #\space #\newline #\t #\x #\x20 #\x65e5
         #\alarm #\backspace #\delete #\escape #\null #\return #\tab"#;
         let mut vec = Vec::new();
         vec.push((TokenType::Character, "#\\a".to_string()));
         vec.push((TokenType::Character, "#\\ ".to_string()));
         vec.push((TokenType::Character, "#\\\n".to_string()));
         vec.push((TokenType::Character, "#\\t".to_string()));
+        vec.push((TokenType::Character, "#\\x".to_string()));
+        vec.push((TokenType::Character, "#\\x20".to_string()));
+        vec.push((TokenType::Character, "#\\x65e5".to_string()));
         vec.push((TokenType::Character, "#\\\x07".to_string()));
         vec.push((TokenType::Character, "#\\\x08".to_string()));
         vec.push((TokenType::Character, "#\\\x7f".to_string()));
