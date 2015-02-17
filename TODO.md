@@ -8,6 +8,10 @@
 ## High Level
 
 * Lexer
+* `Character::from_str()`` to convert char literals to a single character
+    * single characters
+    * character names
+    * hex scalar values
 * Terms and Sequences
 * Garbage collector
 * Parser

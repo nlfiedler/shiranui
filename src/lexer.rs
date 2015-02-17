@@ -564,7 +564,12 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
                         !l.token_matches("#false", false) {
                     return errorf(l, "invalid boolean literal");
                 }
-                // TODO: check that the next character is a "delimiter"
+                if let Some(ch) = l.peek() {
+                    if !is_delimiter(ch) {
+                        l.next();
+                        return errorf(l, "invalid boolean literal");
+                    }
+                }
                 l.emit(TokenType::Boolean);
                 return Some(StateFn(lex_start));
             },
@@ -682,26 +687,24 @@ fn lex_character(l: &mut Lexer) -> Option<StateFn> {
         l.accept_run("abcdeiklmnoprstuw");
     }
     let folding = l.folding;
-    // TODO: change these to simply emit the token as it was found, like numbers
-    // TODO: write a Character::from_str() that converts char literals to a single character
     if l.token_matches("#\\newline", folding) {
-        l.emit_text(TokenType::Character, "#\\\n");
+        l.emit(TokenType::Character);
     } else if l.token_matches("#\\space", folding) {
-        l.emit_text(TokenType::Character, "#\\ ");
+        l.emit(TokenType::Character);
     } else if l.token_matches("#\\alarm", folding) {
-        l.emit_text(TokenType::Character, "#\\\x07");
+        l.emit(TokenType::Character);
     } else if l.token_matches("#\\backspace", folding) {
-        l.emit_text(TokenType::Character, "#\\\x08");
+        l.emit(TokenType::Character);
     } else if l.token_matches("#\\delete", folding) {
-        l.emit_text(TokenType::Character, "#\\\x7f");
+        l.emit(TokenType::Character);
     } else if l.token_matches("#\\escape", folding) {
-        l.emit_text(TokenType::Character, "#\\\x1b");
+        l.emit(TokenType::Character);
     } else if l.token_matches("#\\null", folding) {
-        l.emit_text(TokenType::Character, "#\\\0");
+        l.emit(TokenType::Character);
     } else if l.token_matches("#\\return", folding) {
-        l.emit_text(TokenType::Character, "#\\\r");
+        l.emit(TokenType::Character);
     } else if l.token_matches("#\\tab", folding) {
-        l.emit_text(TokenType::Character, "#\\\t");
+        l.emit(TokenType::Character);
     } else {
         // assert that it is a single character (e.g. #\a)
         let prev = l.input.char_range_at_reverse(l.pos);
@@ -709,8 +712,7 @@ fn lex_character(l: &mut Lexer) -> Option<StateFn> {
             return errorf(l, "invalid character literal");
         }
         if let Some(ch) = l.peek() {
-            // TODO: check that ch is a "delimiter"
-            if ch.is_alphabetic() {
+            if !is_delimiter(ch) {
                 l.next();
                 return errorf(l, "invalid character literal")
             }
@@ -930,8 +932,8 @@ fn lex_number(l: &mut Lexer) -> Option<StateFn> {
     // Next character must not be alphanumeric or related to numbers in any
     // way ('.', '+', '-', '@'), which happens to be "special subsequent".
     if let Some(ch) = l.peek() {
-        // TODO: check that ch is a "delimiter"
-        if ch.is_alphanumeric() || is_special_subsequent(ch) {
+        if !is_delimiter(ch) {
+            l.next();
             return errorf(l, "malformed number suffix")
         }
     }
@@ -1391,6 +1393,8 @@ mod test {
         let mut map = HashMap::new();
         map.insert("#tree", "invalid boolean literal");
         map.insert("#fawls", "invalid boolean literal");
+        map.insert("#truez", "invalid boolean literal");
+        map.insert("#falseH", "invalid boolean literal");
         verify_errors(map);
     }
 
@@ -1449,19 +1453,19 @@ mod test {
         #\alarm #\backspace #\delete #\escape #\null #\return #\tab"#;
         let mut vec = Vec::new();
         vec.push((TokenType::Character, "#\\a".to_string()));
-        vec.push((TokenType::Character, "#\\ ".to_string()));
-        vec.push((TokenType::Character, "#\\\n".to_string()));
+        vec.push((TokenType::Character, "#\\space".to_string()));
+        vec.push((TokenType::Character, "#\\newline".to_string()));
         vec.push((TokenType::Character, "#\\t".to_string()));
         vec.push((TokenType::Character, "#\\x".to_string()));
         vec.push((TokenType::Character, "#\\x20".to_string()));
         vec.push((TokenType::Character, "#\\x65e5".to_string()));
-        vec.push((TokenType::Character, "#\\\x07".to_string()));
-        vec.push((TokenType::Character, "#\\\x08".to_string()));
-        vec.push((TokenType::Character, "#\\\x7f".to_string()));
-        vec.push((TokenType::Character, "#\\\x1b".to_string()));
-        vec.push((TokenType::Character, "#\\\0".to_string()));
-        vec.push((TokenType::Character, "#\\\r".to_string()));
-        vec.push((TokenType::Character, "#\\\t".to_string()));
+        vec.push((TokenType::Character, "#\\alarm".to_string()));
+        vec.push((TokenType::Character, "#\\backspace".to_string()));
+        vec.push((TokenType::Character, "#\\delete".to_string()));
+        vec.push((TokenType::Character, "#\\escape".to_string()));
+        vec.push((TokenType::Character, "#\\null".to_string()));
+        vec.push((TokenType::Character, "#\\return".to_string()));
+        vec.push((TokenType::Character, "#\\tab".to_string()));
         verify_success(input, vec);
         let mut map = HashMap::new();
         map.insert("#\\foo", "invalid character literal");
