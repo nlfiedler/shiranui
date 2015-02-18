@@ -21,10 +21,23 @@
 //! a parser would consume them. This allows the lexer code to be written
 //! in a very straightforward and clear manner.
 //!
-// TODO: write more module documentation explaining how the lexer works
-
-// TODO: remove once the code matures
-#![allow(dead_code)]
+//! The design of the lexer involves a finite state machine consisting of
+//! function pointers. The starting function determines which function
+//! should go next, returning the pointer to that function. This continues
+//! until either `None` is returned by a function, or the end of the input
+//! is reached. The "machine" itself is very simple, it continuously invokes
+//! the current state function, using its return value as the next function
+//! to invoke.
+//!
+//! As each function processes the input, it may emit one or more tokens.
+//! These are sent over a channel from which the recipient, presumably a
+//! parser, consumes them. The lexer runs in a separate thread, sending
+//! tokens to the channel until either it fills up and blocks, or the input
+//! is exhausted.
+//!
+//! If the input contains an invalid sequence of some sort, the lexer will
+//! report the error via a special error token, sent via the channel.
+//!
 
 // TODO: remove once the slice vs [..] warnings settle down
 #![allow(deprecated)]
@@ -155,25 +168,6 @@ impl<'a> Lexer<'a> {
         });
         self.start = self.pos;
     }
-
-    /// `emit_escaped` calls `replace_escapes()` on the current token text
-    /// and emits that as the given token type, returning the result of the
-    /// `replace_escapes()`, which may indicate an error.
-    // fn emit_escaped(&mut self, t: TokenType) -> Result<u8, &'static str> {
-    //     let text = self.input.as_slice().slice(self.start, self.pos);
-    //     let result = replace_escapes(text);
-    //     if result.is_ok() {
-    //         let _ = self.chan.send(Token {
-    //             typ: t,
-    //             val: result.unwrap(),
-    //             row: self.row,
-    //             col: self.col
-    //         });
-    //         self.start = self.pos;
-    //         return Ok(0)
-    //     }
-    //     Err(result.unwrap_err())
-    // }
 
     /// `emit_folded` will fold the case of the token and then emit the
     /// identifier to the token channel.
@@ -479,19 +473,40 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
 /// `lex_string` expects the current character to be a double-quote and
 /// scans the input to find the end of the quoted string.
 fn lex_string(l: &mut Lexer) -> Option<StateFn> {
+    let mut text = String::new();
     while let Some(ch) = l.next() {
         match ch {
             // pass over escaped characters
             '\\' => {
-                l.next();
-                continue;
+                if let Some(ch) = l.next() {
+                    match ch {
+                        '"' => text.push('"'),
+                        ' ' | '\t' => text.push(ch),
+                        _ => {
+                            // otherwise let replace_escapes() handle it
+                            text.push('\\');
+                            text.push(ch);
+                        }
+                    }
+                } else {
+                    return errorf(l, "improperly terminated string");
+                }
             },
             '"' => {
                 // reached the end of the string
-                l.emit(TokenType::String);
-                return Some(StateFn(lex_start));
+                match replace_escapes(text.as_slice()) {
+                    Ok(escaped) => {
+                        l.emit_text(TokenType::String, escaped.as_slice());
+                        return Some(StateFn(lex_start));
+                    },
+                    Err(msg) => {
+                        return errorf(l, msg);
+                    }
+                }
             },
-            _ => continue
+            _ => {
+                text.push(ch);
+            }
         }
     }
     return errorf(l, "unclosed quoted string");
@@ -967,7 +982,7 @@ fn lex_number(l: &mut Lexer) -> Option<StateFn> {
 fn lex_dot(l: &mut Lexer) -> Option<StateFn> {
     if let Some(ch) = l.peek() {
         // a dot followed by dot subsequent is an identifier
-        if is_dot_subsequent(ch) {
+        if is_dot_subsequent(ch) || is_delimiter(ch) {
             l.rewind();
             return Some(StateFn(lex_identifier));
         }
@@ -991,7 +1006,7 @@ fn lex_explicit_sign(l: &mut Lexer) -> Option<StateFn> {
             l.rewind();
             return Some(StateFn(lex_number));
         }
-        if is_sign_subsequent(ch) {
+        if is_sign_subsequent(ch) || is_delimiter(ch) {
             l.rewind();
             return Some(StateFn(lex_identifier));
         } else if ch == '.' {
@@ -1165,6 +1180,7 @@ fn replace_escapes(text: &str) -> Result<String, &'static str> {
                     't' => result.push('\t'),
                     'n' => result.push('\n'),
                     'r' => result.push('\r'),
+                    '\\' => result.push('\\'),
                     'x' => {
                         let mut hex = String::new();
                         loop {
@@ -1213,8 +1229,10 @@ mod test {
     use std::collections::HashMap;
     use std::vec::Vec;
 
-    fn verify_success(input: &str, expected: Vec<(TokenType, String)>) {
-        let rx = lex("unit", input);
+    /// `verify_success` lexes a program and verifies that the tokens
+    /// emitted match those in the vector of tuples.
+    fn verify_success(input: &str, expected: Vec<(TokenType, &str)>) {
+        let rx = lex("verify_success", input);
         for er in expected.iter() {
             if let Some(token) = rx.recv().ok() {
                 assert_eq!(token.typ, er.0);
@@ -1231,9 +1249,31 @@ mod test {
         }
     }
 
+    /// `verify_locations` lexes a program and verifies that the tokens
+    /// emitted match in type, value, and location of those given.
+    fn verify_locations(input: &str, expected: Vec<(TokenType, &str, usize, usize)>) {
+        let rx = lex("verify_locations", input);
+        for er in expected.iter() {
+            if let Some(token) = rx.recv().ok() {
+                assert_eq!(token.typ, er.0);
+                assert_eq!(token.val.as_slice(), er.1);
+                assert_eq!(token.row, er.2);
+                assert_eq!(token.col, er.3);
+            } else {
+                assert!(false, "ran out of tokens");
+            }
+        }
+        // make sure we have reached the end of the results
+        if let Some(token) = rx.recv().ok() {
+            assert_eq!(token.typ, TokenType::EndOfFile);
+        } else {
+            assert!(false, "should have exhausted tokens");
+        }
+    }
+
     /// `verify_singles` verifies individual expressions to check for
     /// special cases in the lexer.
-    fn verify_singles(inputs: HashMap<&str, (TokenType, String)>) {
+    fn verify_singles(inputs: HashMap<&str, (TokenType, &str)>) {
         for (input, er) in inputs.iter() {
             let rx = lex("verify_singles", input);
             if let Some(token) = rx.recv().ok() {
@@ -1241,7 +1281,7 @@ mod test {
                     panic!("lex failed for {} with {}", input, token.val);
                 }
                 assert_eq!(token.typ, er.0);
-                assert_eq!(token.val, er.1);
+                assert_eq!(token.val.as_slice(), er.1);
             } else {
                 assert!(false, "ran out of tokens");
             }
@@ -1316,25 +1356,31 @@ mod test {
     #[test]
     fn test_open_close_paren() {
         let mut vec = Vec::new();
-        vec.push((TokenType::OpenParen, "(".to_string()));
-        vec.push((TokenType::CloseParen, ")".to_string()));
+        vec.push((TokenType::OpenParen, "("));
+        vec.push((TokenType::CloseParen, ")"));
         verify_success("()", vec);
     }
 
     #[test]
     fn test_quoted_string() {
         // valid inputs
-        let mut vec = Vec::new();
-        vec.push((TokenType::String, "\"foo\"".to_string()));
-        verify_success("\"foo\"", vec);
-        // TODO: test \a \b \t \n \r
-        // TODO: test \" and \\
-        // TODO: test \ before line ending
-        // TODO: test inline hex escape (\xDDDD)
+        let mut singles = HashMap::new();
+        singles.insert("\"foo\"", (TokenType::String, "foo"));
+        singles.insert("\"f\\ao\"", (TokenType::String, "f\x07o"));
+        singles.insert("\"f\\bo\"", (TokenType::String, "f\x08o"));
+        singles.insert("\"f\\to\"", (TokenType::String, "f\to"));
+        singles.insert("\"f\\no\"", (TokenType::String, "f\no"));
+        singles.insert("\"f\\ro\"", (TokenType::String, "f\ro"));
+        singles.insert("\"foo\\  \n  bar\"", (TokenType::String, "foo  \n  bar"));
+        singles.insert("\"f\\\"o\"", (TokenType::String, "f\"o"));
+        singles.insert("\"f\\\\o\"", (TokenType::String, "f\\o"));
+        singles.insert("\"f\\x20;o\"", (TokenType::String, "f o"));
+        verify_singles(singles);
         // error cases
-        let mut map = HashMap::new();
-        map.insert("\"foo", "unclosed quoted string");
-        verify_errors(map);
+        let mut errors = HashMap::new();
+        errors.insert("\"foo", "unclosed quoted string");
+        errors.insert("\"foo\\", "improperly terminated string");
+        verify_errors(errors);
     }
 
     #[test]
@@ -1360,24 +1406,24 @@ mod test {
     #[test]
     fn test_separators() {
         let mut vec = Vec::new();
-        vec.push((TokenType::OpenParen, "(".to_string()));
-        vec.push((TokenType::CloseParen, ")".to_string()));
+        vec.push((TokenType::OpenParen, "("));
+        vec.push((TokenType::CloseParen, ")"));
         verify_success("     (\n\t )\r\n", vec);
     }
 
     #[test]
     fn test_ignored_comments() {
         let mut vec = Vec::new();
-        vec.push((TokenType::OpenParen, "(".to_string()));
-        vec.push((TokenType::CloseParen, ")".to_string()));
+        vec.push((TokenType::OpenParen, "("));
+        vec.push((TokenType::CloseParen, ")"));
         verify_success(" ; foo \n   (\n ; bar \n )\n", vec);
     }
 
     #[test]
     fn test_block_comments() {
         let mut vec = Vec::new();
-        vec.push((TokenType::OpenParen, "(".to_string()));
-        vec.push((TokenType::CloseParen, ")".to_string()));
+        vec.push((TokenType::OpenParen, "("));
+        vec.push((TokenType::CloseParen, ")"));
         verify_success("#| outer #| nested |# outer |# ( #| bar |# )", vec);
         let mut map = HashMap::new();
         map.insert("#| foo", "unclosed block comment");
@@ -1387,10 +1433,10 @@ mod test {
     #[test]
     fn test_quotes() {
         let mut vec = Vec::new();
-        vec.push((TokenType::Quote, ",".to_string()));
-        vec.push((TokenType::Quote, ",@".to_string()));
-        vec.push((TokenType::Quote, "'".to_string()));
-        vec.push((TokenType::Quote, "`".to_string()));
+        vec.push((TokenType::Quote, ","));
+        vec.push((TokenType::Quote, ",@"));
+        vec.push((TokenType::Quote, "'"));
+        vec.push((TokenType::Quote, "`"));
         verify_success(", ,@ ' `", vec);
         let mut map = HashMap::new();
         map.insert(",", "reached EOF in quote expression");
@@ -1400,10 +1446,10 @@ mod test {
     #[test]
     fn test_booleans() {
         let mut vec = Vec::new();
-        vec.push((TokenType::Boolean, "#t".to_string()));
-        vec.push((TokenType::Boolean, "#true".to_string()));
-        vec.push((TokenType::Boolean, "#f".to_string()));
-        vec.push((TokenType::Boolean, "#false".to_string()));
+        vec.push((TokenType::Boolean, "#t"));
+        vec.push((TokenType::Boolean, "#true"));
+        vec.push((TokenType::Boolean, "#f"));
+        vec.push((TokenType::Boolean, "#false"));
         verify_success("#t #true #f #false", vec);
         let mut map = HashMap::new();
         map.insert("#tree", "invalid boolean literal");
@@ -1416,21 +1462,21 @@ mod test {
     #[test]
     fn test_vectors() {
         let mut vec = Vec::new();
-        vec.push((TokenType::Vector, "#(".to_string()));
-        vec.push((TokenType::Boolean, "#t".to_string()));
-        vec.push((TokenType::Boolean, "#f".to_string()));
-        vec.push((TokenType::CloseParen, ")".to_string()));
+        vec.push((TokenType::Vector, "#("));
+        vec.push((TokenType::Boolean, "#t"));
+        vec.push((TokenType::Boolean, "#f"));
+        vec.push((TokenType::CloseParen, ")"));
         verify_success("#(#t #f)", vec);
     }
 
     #[test]
     fn test_byte_vectors() {
         let mut vec = Vec::new();
-        vec.push((TokenType::ByteVector, "#u8(".to_string()));
-        vec.push((TokenType::Integer, "32".to_string()));
-        vec.push((TokenType::Integer, "64".to_string()));
-        vec.push((TokenType::Integer, "128".to_string()));
-        vec.push((TokenType::CloseParen, ")".to_string()));
+        vec.push((TokenType::ByteVector, "#u8("));
+        vec.push((TokenType::Integer, "32"));
+        vec.push((TokenType::Integer, "64"));
+        vec.push((TokenType::Integer, "128"));
+        vec.push((TokenType::CloseParen, ")"));
         verify_success("#u8(32 64 128)", vec);
         let mut map = HashMap::new();
         map.insert("#u ", "invalid byte vector expression");
@@ -1442,19 +1488,19 @@ mod test {
     #[test]
     fn test_comments() {
         let mut vec = Vec::new();
-        vec.push((TokenType::Comment, "#;".to_string()));
-        vec.push((TokenType::Boolean, "#t".to_string()));
-        vec.push((TokenType::Comment, "#;".to_string()));
-        vec.push((TokenType::Boolean, "#f".to_string()));
+        vec.push((TokenType::Comment, "#;"));
+        vec.push((TokenType::Boolean, "#t"));
+        vec.push((TokenType::Comment, "#;"));
+        vec.push((TokenType::Boolean, "#f"));
         verify_success("#;  #t #;#f", vec);
     }
 
     #[test]
     fn test_labels() {
         let mut vec = Vec::new();
-        vec.push((TokenType::LabelDefinition, "#1=".to_string()));
-        vec.push((TokenType::Boolean, "#t".to_string()));
-        vec.push((TokenType::LabelReference, "#1#".to_string()));
+        vec.push((TokenType::LabelDefinition, "#1="));
+        vec.push((TokenType::Boolean, "#t"));
+        vec.push((TokenType::LabelReference, "#1#"));
         verify_success("#1=#t #1#", vec);
         let mut map = HashMap::new();
         map.insert("#1+", "invalid label expression");
@@ -1467,20 +1513,20 @@ mod test {
         let input = r#"#\a #\space #\newline #\t #\x #\x20 #\x65e5
         #\alarm #\backspace #\delete #\escape #\null #\return #\tab"#;
         let mut vec = Vec::new();
-        vec.push((TokenType::Character, "#\\a".to_string()));
-        vec.push((TokenType::Character, "#\\space".to_string()));
-        vec.push((TokenType::Character, "#\\newline".to_string()));
-        vec.push((TokenType::Character, "#\\t".to_string()));
-        vec.push((TokenType::Character, "#\\x".to_string()));
-        vec.push((TokenType::Character, "#\\x20".to_string()));
-        vec.push((TokenType::Character, "#\\x65e5".to_string()));
-        vec.push((TokenType::Character, "#\\alarm".to_string()));
-        vec.push((TokenType::Character, "#\\backspace".to_string()));
-        vec.push((TokenType::Character, "#\\delete".to_string()));
-        vec.push((TokenType::Character, "#\\escape".to_string()));
-        vec.push((TokenType::Character, "#\\null".to_string()));
-        vec.push((TokenType::Character, "#\\return".to_string()));
-        vec.push((TokenType::Character, "#\\tab".to_string()));
+        vec.push((TokenType::Character, "#\\a"));
+        vec.push((TokenType::Character, "#\\space"));
+        vec.push((TokenType::Character, "#\\newline"));
+        vec.push((TokenType::Character, "#\\t"));
+        vec.push((TokenType::Character, "#\\x"));
+        vec.push((TokenType::Character, "#\\x20"));
+        vec.push((TokenType::Character, "#\\x65e5"));
+        vec.push((TokenType::Character, "#\\alarm"));
+        vec.push((TokenType::Character, "#\\backspace"));
+        vec.push((TokenType::Character, "#\\delete"));
+        vec.push((TokenType::Character, "#\\escape"));
+        vec.push((TokenType::Character, "#\\null"));
+        vec.push((TokenType::Character, "#\\return"));
+        vec.push((TokenType::Character, "#\\tab"));
         verify_success(input, vec);
         let mut map = HashMap::new();
         map.insert("#\\foo", "invalid character literal");
@@ -1492,15 +1538,15 @@ mod test {
     fn test_integers() {
         let inputs = r#"0 123 #d1234 #d#e1234 #o366 #i#o366 #x7b5 #b01010100 15##"#;
         let mut vec = Vec::new();
-        vec.push((TokenType::Integer, "0".to_string()));
-        vec.push((TokenType::Integer, "123".to_string()));
-        vec.push((TokenType::Integer, "#d1234".to_string()));
-        vec.push((TokenType::Integer, "#d#e1234".to_string()));
-        vec.push((TokenType::Integer, "#o366".to_string()));
-        vec.push((TokenType::Integer, "#i#o366".to_string()));
-        vec.push((TokenType::Integer, "#x7b5".to_string()));
-        vec.push((TokenType::Integer, "#b01010100".to_string()));
-        vec.push((TokenType::Integer, "15##".to_string()));
+        vec.push((TokenType::Integer, "0"));
+        vec.push((TokenType::Integer, "123"));
+        vec.push((TokenType::Integer, "#d1234"));
+        vec.push((TokenType::Integer, "#d#e1234"));
+        vec.push((TokenType::Integer, "#o366"));
+        vec.push((TokenType::Integer, "#i#o366"));
+        vec.push((TokenType::Integer, "#x7b5"));
+        vec.push((TokenType::Integer, "#b01010100"));
+        vec.push((TokenType::Integer, "15##"));
         verify_success(inputs, vec);
     }
 
@@ -1508,24 +1554,24 @@ mod test {
     fn test_floats() {
         let inputs = r#".01 0.1 1.00 6e4 7.91e+16 3. 12#.### 1.2345e 1.2345s 1.2345f 1.2345d 1.2345l"#;
         let mut vec = Vec::new();
-        vec.push((TokenType::Float, ".01".to_string()));
-        vec.push((TokenType::Float, "0.1".to_string()));
-        vec.push((TokenType::Float, "1.00".to_string()));
-        vec.push((TokenType::Float, "6e4".to_string()));
-        vec.push((TokenType::Float, "7.91e+16".to_string()));
-        vec.push((TokenType::Float, "3.".to_string()));
-        vec.push((TokenType::Float, "12#.###".to_string()));
-        vec.push((TokenType::Float, "1.2345e".to_string()));
-        vec.push((TokenType::Float, "1.2345s".to_string()));
-        vec.push((TokenType::Float, "1.2345f".to_string()));
-        vec.push((TokenType::Float, "1.2345d".to_string()));
-        vec.push((TokenType::Float, "1.2345l".to_string()));
+        vec.push((TokenType::Float, ".01"));
+        vec.push((TokenType::Float, "0.1"));
+        vec.push((TokenType::Float, "1.00"));
+        vec.push((TokenType::Float, "6e4"));
+        vec.push((TokenType::Float, "7.91e+16"));
+        vec.push((TokenType::Float, "3."));
+        vec.push((TokenType::Float, "12#.###"));
+        vec.push((TokenType::Float, "1.2345e"));
+        vec.push((TokenType::Float, "1.2345s"));
+        vec.push((TokenType::Float, "1.2345f"));
+        vec.push((TokenType::Float, "1.2345d"));
+        vec.push((TokenType::Float, "1.2345l"));
         verify_success(inputs, vec);
         let mut singles = HashMap::new();
-        singles.insert("+inf.0", (TokenType::Float, "+inf.0".to_string()));
-        singles.insert("-inf.0", (TokenType::Float, "-inf.0".to_string()));
-        singles.insert("+nan.0", (TokenType::Float, "+nan.0".to_string()));
-        singles.insert("-nan.0", (TokenType::Float, "-nan.0".to_string()));
+        singles.insert("+inf.0", (TokenType::Float, "+inf.0"));
+        singles.insert("-inf.0", (TokenType::Float, "-inf.0"));
+        singles.insert("+nan.0", (TokenType::Float, "+nan.0"));
+        singles.insert("-nan.0", (TokenType::Float, "-nan.0"));
         verify_singles(singles);
     }
 
@@ -1533,28 +1579,28 @@ mod test {
     fn test_complex() {
         let inputs = r#"3+4i 3.0+4.0i 3.0@4.0 3.0-4.0i -4.0i +4.0i 3.0-i 3.0+i -i +i"#;
         let mut vec = Vec::new();
-        vec.push((TokenType::Complex, "3+4i".to_string()));
-        vec.push((TokenType::Complex, "3.0+4.0i".to_string()));
-        vec.push((TokenType::Complex, "3.0@4.0".to_string()));
-        vec.push((TokenType::Complex, "3.0-4.0i".to_string()));
-        vec.push((TokenType::Complex, "-4.0i".to_string()));
-        vec.push((TokenType::Complex, "+4.0i".to_string()));
-        vec.push((TokenType::Complex, "3.0-i".to_string()));
-        vec.push((TokenType::Complex, "3.0+i".to_string()));
-        vec.push((TokenType::Complex, "-i".to_string()));
-        vec.push((TokenType::Complex, "+i".to_string()));
+        vec.push((TokenType::Complex, "3+4i"));
+        vec.push((TokenType::Complex, "3.0+4.0i"));
+        vec.push((TokenType::Complex, "3.0@4.0"));
+        vec.push((TokenType::Complex, "3.0-4.0i"));
+        vec.push((TokenType::Complex, "-4.0i"));
+        vec.push((TokenType::Complex, "+4.0i"));
+        vec.push((TokenType::Complex, "3.0-i"));
+        vec.push((TokenType::Complex, "3.0+i"));
+        vec.push((TokenType::Complex, "-i"));
+        vec.push((TokenType::Complex, "+i"));
         verify_success(inputs, vec);
         let mut singles = HashMap::new();
         // <infnan> i
-        singles.insert("+inf.0i", (TokenType::Complex, "+inf.0i".to_string()));
-        singles.insert("-inf.0i", (TokenType::Complex, "-inf.0i".to_string()));
-        singles.insert("+nan.0i", (TokenType::Complex, "+nan.0i".to_string()));
-        singles.insert("-nan.0i", (TokenType::Complex, "-nan.0i".to_string()));
+        singles.insert("+inf.0i", (TokenType::Complex, "+inf.0i"));
+        singles.insert("-inf.0i", (TokenType::Complex, "-inf.0i"));
+        singles.insert("+nan.0i", (TokenType::Complex, "+nan.0i"));
+        singles.insert("-nan.0i", (TokenType::Complex, "-nan.0i"));
         // <real R> <infnan> i
-        singles.insert("1+inf.0i", (TokenType::Complex, "1+inf.0i".to_string()));
-        singles.insert("1-inf.0i", (TokenType::Complex, "1-inf.0i".to_string()));
-        singles.insert("1+nan.0i", (TokenType::Complex, "1+nan.0i".to_string()));
-        singles.insert("1-nan.0i", (TokenType::Complex, "1-nan.0i".to_string()));
+        singles.insert("1+inf.0i", (TokenType::Complex, "1+inf.0i"));
+        singles.insert("1-inf.0i", (TokenType::Complex, "1-inf.0i"));
+        singles.insert("1+nan.0i", (TokenType::Complex, "1+nan.0i"));
+        singles.insert("1-nan.0i", (TokenType::Complex, "1-nan.0i"));
         verify_singles(singles);
         let mut errors = HashMap::new();
         errors.insert("3.0+4.0", "malformed complex");
@@ -1565,9 +1611,9 @@ mod test {
     fn test_rationals() {
         let inputs = r#"6/10 123/456 -6/12"#;
         let mut vec = Vec::new();
-        vec.push((TokenType::Rational, "6/10".to_string()));
-        vec.push((TokenType::Rational, "123/456".to_string()));
-        vec.push((TokenType::Rational, "-6/12".to_string()));
+        vec.push((TokenType::Rational, "6/10"));
+        vec.push((TokenType::Rational, "123/456"));
+        vec.push((TokenType::Rational, "-6/12"));
         verify_success(inputs, vec);
     }
 
@@ -1610,59 +1656,59 @@ mod test {
     #[test]
     fn test_identifier_singles() {
         let mut map = HashMap::new();
-        map.insert("lambda", (TokenType::Identifier, "lambda".to_string()));
-        map.insert("q", (TokenType::Identifier, "q".to_string()));
-        map.insert("ab12", (TokenType::Identifier, "ab12".to_string()));
-        map.insert("+", (TokenType::Identifier, "+".to_string()));
-        map.insert("++", (TokenType::Identifier, "++".to_string()));
-        map.insert("+-", (TokenType::Identifier, "+-".to_string()));
-        map.insert("+@", (TokenType::Identifier, "+@".to_string()));
-        map.insert("-", (TokenType::Identifier, "-".to_string()));
-        map.insert("--", (TokenType::Identifier, "--".to_string()));
-        map.insert("-+", (TokenType::Identifier, "-+".to_string()));
-        map.insert("-@", (TokenType::Identifier, "-@".to_string()));
-        map.insert("+g", (TokenType::Identifier, "+g".to_string()));
-        map.insert("+.a", (TokenType::Identifier, "+.a".to_string()));
-        map.insert("+..a", (TokenType::Identifier, "+..a".to_string()));
-        map.insert("-g", (TokenType::Identifier, "-g".to_string()));
-        map.insert("-.a", (TokenType::Identifier, "-.a".to_string()));
-        map.insert("-..a", (TokenType::Identifier, "-..a".to_string()));
-        map.insert(".a", (TokenType::Identifier, ".a".to_string()));
-        map.insert("..a", (TokenType::Identifier, "..a".to_string()));
-        map.insert(".", (TokenType::Identifier, ".".to_string()));
-        map.insert("..", (TokenType::Identifier, "..".to_string()));
-        map.insert("...", (TokenType::Identifier, "...".to_string()));
-        map.insert("!", (TokenType::Identifier, "!".to_string()));
-        map.insert("$", (TokenType::Identifier, "$".to_string()));
-        map.insert("%", (TokenType::Identifier, "%".to_string()));
-        map.insert("&", (TokenType::Identifier, "&".to_string()));
-        map.insert("*", (TokenType::Identifier, "*".to_string()));
-        map.insert("/", (TokenType::Identifier, "/".to_string()));
-        map.insert(":", (TokenType::Identifier, ":".to_string()));
-        map.insert("<", (TokenType::Identifier, "<".to_string()));
-        map.insert("=", (TokenType::Identifier, "=".to_string()));
-        map.insert(">", (TokenType::Identifier, ">".to_string()));
-        map.insert("?", (TokenType::Identifier, "?".to_string()));
-        map.insert("^", (TokenType::Identifier, "^".to_string()));
-        map.insert("_", (TokenType::Identifier, "_".to_string()));
-        map.insert("~", (TokenType::Identifier, "~".to_string()));
-        map.insert("list->vector", (TokenType::Identifier, "list->vector".to_string()));
-        map.insert("+soup+", (TokenType::Identifier, "+soup+".to_string()));
-        map.insert("V17a", (TokenType::Identifier, "V17a".to_string()));
-        map.insert("<=?", (TokenType::Identifier, "<=?".to_string()));
-        map.insert("a34kTMNs", (TokenType::Identifier, "a34kTMNs".to_string()));
-        map.insert("|two words|", (TokenType::Identifier, "|two words|".to_string()));
-        map.insert("t-w-r-h-m-m", (TokenType::Identifier, "t-w-r-h-m-m".to_string()));
-        map.insert("||", (TokenType::Identifier, "||".to_string()));
-        map.insert("|foo @#$! bar|", (TokenType::Identifier, "|foo @#$! bar|".to_string()));
-        map.insert("|foo\\abar|", (TokenType::Identifier, "|foo\x07bar|".to_string()));
-        map.insert("|foo\\bbar|", (TokenType::Identifier, "|foo\x08bar|".to_string()));
-        map.insert("|foo\\tbar|", (TokenType::Identifier, "|foo\tbar|".to_string()));
-        map.insert("|foo\\nbar|", (TokenType::Identifier, "|foo\nbar|".to_string()));
-        map.insert("|foo\\rbar|", (TokenType::Identifier, "|foo\rbar|".to_string()));
-        map.insert("|foo\\|bar|", (TokenType::Identifier, "|foo|bar|".to_string()));
-        map.insert("|foo\\x20;bar|", (TokenType::Identifier, "|foo bar|".to_string()));
-        map.insert("|foo\\x20;\\x20;bar|", (TokenType::Identifier, "|foo  bar|".to_string()));
+        map.insert("lambda", (TokenType::Identifier, "lambda"));
+        map.insert("q", (TokenType::Identifier, "q"));
+        map.insert("ab12", (TokenType::Identifier, "ab12"));
+        map.insert("+", (TokenType::Identifier, "+"));
+        map.insert("++", (TokenType::Identifier, "++"));
+        map.insert("+-", (TokenType::Identifier, "+-"));
+        map.insert("+@", (TokenType::Identifier, "+@"));
+        map.insert("-", (TokenType::Identifier, "-"));
+        map.insert("--", (TokenType::Identifier, "--"));
+        map.insert("-+", (TokenType::Identifier, "-+"));
+        map.insert("-@", (TokenType::Identifier, "-@"));
+        map.insert("+g", (TokenType::Identifier, "+g"));
+        map.insert("+.a", (TokenType::Identifier, "+.a"));
+        map.insert("+..a", (TokenType::Identifier, "+..a"));
+        map.insert("-g", (TokenType::Identifier, "-g"));
+        map.insert("-.a", (TokenType::Identifier, "-.a"));
+        map.insert("-..a", (TokenType::Identifier, "-..a"));
+        map.insert(".a", (TokenType::Identifier, ".a"));
+        map.insert("..a", (TokenType::Identifier, "..a"));
+        map.insert(".", (TokenType::Identifier, "."));
+        map.insert("..", (TokenType::Identifier, ".."));
+        map.insert("...", (TokenType::Identifier, "..."));
+        map.insert("!", (TokenType::Identifier, "!"));
+        map.insert("$", (TokenType::Identifier, "$"));
+        map.insert("%", (TokenType::Identifier, "%"));
+        map.insert("&", (TokenType::Identifier, "&"));
+        map.insert("*", (TokenType::Identifier, "*"));
+        map.insert("/", (TokenType::Identifier, "/"));
+        map.insert(":", (TokenType::Identifier, ":"));
+        map.insert("<", (TokenType::Identifier, "<"));
+        map.insert("=", (TokenType::Identifier, "="));
+        map.insert(">", (TokenType::Identifier, ">"));
+        map.insert("?", (TokenType::Identifier, "?"));
+        map.insert("^", (TokenType::Identifier, "^"));
+        map.insert("_", (TokenType::Identifier, "_"));
+        map.insert("~", (TokenType::Identifier, "~"));
+        map.insert("list->vector", (TokenType::Identifier, "list->vector"));
+        map.insert("+soup+", (TokenType::Identifier, "+soup+"));
+        map.insert("V17a", (TokenType::Identifier, "V17a"));
+        map.insert("<=?", (TokenType::Identifier, "<=?"));
+        map.insert("a34kTMNs", (TokenType::Identifier, "a34kTMNs"));
+        map.insert("|two words|", (TokenType::Identifier, "|two words|"));
+        map.insert("t-w-r-h-m-m", (TokenType::Identifier, "t-w-r-h-m-m"));
+        map.insert("||", (TokenType::Identifier, "||"));
+        map.insert("|foo @#$! bar|", (TokenType::Identifier, "|foo @#$! bar|"));
+        map.insert("|foo\\abar|", (TokenType::Identifier, "|foo\x07bar|"));
+        map.insert("|foo\\bbar|", (TokenType::Identifier, "|foo\x08bar|"));
+        map.insert("|foo\\tbar|", (TokenType::Identifier, "|foo\tbar|"));
+        map.insert("|foo\\nbar|", (TokenType::Identifier, "|foo\nbar|"));
+        map.insert("|foo\\rbar|", (TokenType::Identifier, "|foo\rbar|"));
+        map.insert("|foo\\|bar|", (TokenType::Identifier, "|foo|bar|"));
+        map.insert("|foo\\x20;bar|", (TokenType::Identifier, "|foo bar|"));
+        map.insert("|foo\\x20;\\x20;bar|", (TokenType::Identifier, "|foo  bar|"));
         verify_singles(map);
     }
 
@@ -1689,10 +1735,10 @@ mod test {
         #!no-fold-case
         #\newline"#;
         let mut vec = Vec::new();
-        vec.push((TokenType::Character, "#\\newline".to_string()));
-        vec.push((TokenType::Character, "#\\newline".to_string()));
-        vec.push((TokenType::Character, "#\\newline".to_string()));
-        vec.push((TokenType::Character, "#\\newline".to_string()));
+        vec.push((TokenType::Character, "#\\newline"));
+        vec.push((TokenType::Character, "#\\newline"));
+        vec.push((TokenType::Character, "#\\newline"));
+        vec.push((TokenType::Character, "#\\newline"));
         verify_success(input, vec);
     }
 
@@ -1706,10 +1752,10 @@ mod test {
         #!no-fold-case
         lamBDA"#;
         let mut vec = Vec::new();
-        vec.push((TokenType::Identifier, "lambda".to_string()));
-        vec.push((TokenType::Identifier, "lAMbdA".to_string()));
-        vec.push((TokenType::Identifier, "lambda".to_string()));
-        vec.push((TokenType::Identifier, "lamBDA".to_string()));
+        vec.push((TokenType::Identifier, "lambda"));
+        vec.push((TokenType::Identifier, "lAMbdA"));
+        vec.push((TokenType::Identifier, "lambda"));
+        vec.push((TokenType::Identifier, "lamBDA"));
         verify_success(input, vec);
     }
 
@@ -1721,6 +1767,49 @@ mod test {
         map.insert("#!kazaam", "invalid Scheme directive");
         verify_errors(map);
     }
-}
 
-// TODO: port over the tests from lexer_test.go in bakeneko
+    #[test]
+    fn test_location_information() {
+        // The test text includes several elements that involve having
+        // the lexer go backward as well as rewinding.
+        let input = r#"; testing locations
+(define fact
+  (lambda (n)
+    (if (<= n #x01)
+        1
+        (* n (fact (- n 1))))))"#;
+        let mut vec = Vec::new();
+        vec.push((TokenType::OpenParen,  "(",      2, 1));
+        vec.push((TokenType::Identifier, "define", 2, 7));
+        vec.push((TokenType::Identifier, "fact",   2, 12));
+        vec.push((TokenType::OpenParen,  "(",      3, 3));
+        vec.push((TokenType::Identifier, "lambda", 3, 9));
+        vec.push((TokenType::OpenParen,  "(",      3, 11));
+        vec.push((TokenType::Identifier, "n",      3, 12));
+        vec.push((TokenType::CloseParen, ")",      3, 13));
+        vec.push((TokenType::OpenParen,  "(",      4, 5));
+        vec.push((TokenType::Identifier, "if",     4, 7));
+        vec.push((TokenType::OpenParen,  "(",      4, 9));
+        vec.push((TokenType::Identifier, "<=",     4, 11));
+        vec.push((TokenType::Identifier, "n",      4, 13));
+        vec.push((TokenType::Integer,    "#x01",   4, 18));
+        vec.push((TokenType::CloseParen, ")",      4, 19));
+        vec.push((TokenType::Integer,    "1",      5, 9));
+        vec.push((TokenType::OpenParen,  "(",      6, 9));
+        vec.push((TokenType::Identifier, "*",      6, 10));
+        vec.push((TokenType::Identifier, "n",      6, 12));
+        vec.push((TokenType::OpenParen,  "(",      6, 14));
+        vec.push((TokenType::Identifier, "fact",   6, 18));
+        vec.push((TokenType::OpenParen,  "(",      6, 20));
+        vec.push((TokenType::Identifier, "-",      6, 21));
+        vec.push((TokenType::Identifier, "n",      6, 23));
+        vec.push((TokenType::Integer,    "1",      6, 25));
+        vec.push((TokenType::CloseParen, ")",      6, 26));
+        vec.push((TokenType::CloseParen, ")",      6, 27));
+        vec.push((TokenType::CloseParen, ")",      6, 28));
+        vec.push((TokenType::CloseParen, ")",      6, 29));
+        vec.push((TokenType::CloseParen, ")",      6, 30));
+        vec.push((TokenType::CloseParen, ")",      6, 31));
+        verify_locations(input, vec);
+    }
+}
