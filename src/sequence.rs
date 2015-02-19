@@ -25,6 +25,17 @@ use std::fmt;
 
 trait Term {
     // TODO: define what a Term is; any atom or sequence
+    fn is_boolean() -> bool;
+    fn is_character() -> bool;
+    fn is_complex() -> bool;
+    fn is_float() -> bool;
+    fn is_integer() -> bool;
+    fn is_pair() -> bool;
+    fn is_rational() -> bool;
+    fn is_sequence() -> bool;
+    fn is_string() -> bool;
+    fn is_symbol() -> bool;
+    fn is_vector() -> bool;
 }
 
 // TODO: finish defining a Sequence type that both Pair and Vector implement

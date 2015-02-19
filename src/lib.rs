@@ -20,5 +20,6 @@
 #![feature(std_misc)]
 #![feature(unicode)]
 
+pub mod atom;
 pub mod lexer;
 pub mod sequence;
