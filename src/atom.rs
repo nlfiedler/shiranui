@@ -112,6 +112,8 @@ mod test {
         assert_eq!("#\\delete".parse().unwrap(), Character('\x7f'));
         assert_eq!("#\\escape".parse().unwrap(), Character('\x1b'));
         assert_eq!("#\\null".parse().unwrap(), Character('\0'));
+        assert_eq!("#\\y".parse().unwrap(), Character('y'));
+        assert_eq!("#\\x65e5".parse().unwrap(), Character('日'));
         // error cases
         assert_eq!("#\\xZZZ".parse::<Character>().unwrap_err(),
                    ParseCharError{ kind: CharErrorKind::InvalidHex });
