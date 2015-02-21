@@ -24,17 +24,18 @@
 #![allow(dead_code)]
 
 use std::char;
+use std::cmp::{PartialOrd, Ordering};
 use std::error::Error;
-use std::fmt;
+use std::fmt::{self, Display, Formatter};
 use std::num;
 
-#[derive(Copy, Eq, Hash, PartialEq, Debug)]
+#[derive(Eq, Hash, PartialEq, Debug)]
 pub enum Value {
     EmptyList,
     Character(char),
     Boolean(bool),
-    // String(String),
-    // Symbol(String),
+    Symbol(String),
+    String(String),
     // Integer(i64),
     // Float(f64),
     // Complex(f64, f64),
@@ -46,11 +47,6 @@ pub enum Value {
     // Port(),
     // Nil or Void?
 }
-
-// TODO: YAGNI: Atom.CompareTo() is only needed for comparing symbols and numbers
-// TODO: YAGNI: Atom.EqualTo() is used for equal?, eq?, and eqv? and a lot of symbol matching
-// TODO: for symbol matching, would be brilliant to handle like Erlang does with atoms
-//       (probably #[derive(Eq)] will do the trick already)
 
 impl Value {
 
@@ -64,6 +60,16 @@ impl Value {
         Value::Character(ch)
     }
 
+    /// `new_symbol` constructs a `Symbol` from the given value.
+    pub fn new_symbol(sym: &str) -> Value {
+        Value::Symbol(sym.to_string())
+    }
+
+    /// `new_string` constructs a `String` from the given value.
+    pub fn new_string(sym: &str) -> Value {
+        Value::String(sym.to_string())
+    }
+
     /// `is_boolean` returns true if the value is a boolean.
     pub fn is_boolean(&self) -> bool {
         match *self {
@@ -72,10 +78,26 @@ impl Value {
         }
     }
 
-    /// `is_boolean` returns true if the value is a character.
+    /// `is_character` returns true if the value is a character.
     pub fn is_character(&self) -> bool {
         match *self {
             Value::Character(_) => true,
+            _ => false,
+        }
+    }
+
+    /// `is_symbol` returns true if the value is a symbol.
+    pub fn is_symbol(&self) -> bool {
+        match *self {
+            Value::Symbol(_) => true,
+            _ => false,
+        }
+    }
+
+    /// `is_string` returns true if the value is a string.
+    pub fn is_string(&self) -> bool {
+        match *self {
+            Value::String(_) => true,
             _ => false,
         }
     }
@@ -89,7 +111,6 @@ impl Value {
     // pub fn is_procedure(&self) -> bool;
     // pub fn is_rational(&self) -> bool;
     // pub fn is_string(&self) -> bool;
-    // pub fn is_symbol(&self) -> bool;
     // pub fn is_vector(&self) -> bool;
 
     /// `to_bool` extracts the boolean value; returns `None` if not Boolean.
@@ -107,15 +128,53 @@ impl Value {
             _ => None,
         }
     }
+
+    /// `to_str` extracts the string value of symbols and strings.
+    /// The returned value is a clone of the original.
+    /// Returns `None` if the value is neither a symbol nor string.
+    pub fn to_str(&self) -> Option<String> {
+        match *self {
+            // clone the string so the caller cannot mutate it and wreak havoc
+            Value::Symbol(ref sym) => Some(sym.clone()),
+            Value::String(ref s) => Some(s.clone()),
+            _ => None,
+        }
+    }
 }
 
-impl fmt::Display for Value {
+impl Display for Value {
 
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
             Value::EmptyList => write!(f, "()"),
             Value::Boolean(b) => write!(f, "#{}", b),
             Value::Character(ch) => write!(f, "#\\{}", ch),
+            Value::Symbol(ref sym) => write!(f, "{}", sym),
+            Value::String(ref s) => write!(f, "{}", s),
+        }
+    }
+}
+
+// TODO: implement PartialEq for symbols and numbers
+
+impl PartialOrd for Value {
+
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match *self {
+            Value::Symbol(ref lhs) => {
+                match *other {
+                    Value::Symbol(ref rhs) => Some(lhs.cmp(rhs)),
+                    _ => None
+                }
+            },
+            Value::String(ref lhs) => {
+                match *other {
+                    Value::String(ref rhs) => Some(lhs.cmp(rhs)),
+                    _ => None
+                }
+            },
+            // TODO: add number comparison
+            _ => None,
         }
     }
 }
@@ -134,13 +193,15 @@ pub fn bool_from_str(s: &str) -> Result<bool, ParseBoolError> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseBoolError { _priv: () }
 
-impl fmt::Display for ParseBoolError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Display for ParseBoolError {
+
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         "provided string was not `#t`, `#true`, `#f`, or `#false`".fmt(f)
     }
 }
 
 impl Error for ParseBoolError {
+
     fn description(&self) -> &str {
         "failed to parse bool"
     }
@@ -192,13 +253,15 @@ enum CharErrorKind {
     Unrecognized,
 }
 
-impl fmt::Display for ParseCharError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Display for ParseCharError {
+
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         self.description().fmt(f)
     }
 }
 
 impl Error for ParseCharError {
+
     fn description(&self) -> &str {
         match self.kind {
             CharErrorKind::InvalidUTF => "invalid UTF code point",
@@ -250,23 +313,53 @@ mod test {
     fn test_new_values() {
         assert_eq!(Value::new_boolean(true), Value::Boolean(true));
         assert_eq!(Value::new_character('a'), Value::Character('a'));
+        assert_eq!(Value::new_symbol("abc"), Value::Symbol("abc".to_string()));
+        assert_eq!(Value::new_string("abc"), Value::String("abc".to_string()));
     }
 
     #[test]
     fn test_value_types() {
+        // boolean
         assert!(Value::new_boolean(true).is_boolean());
         assert!(!Value::new_boolean(true).is_character());
-        assert!(!Value::new_character('a').is_boolean());
+        assert!(!Value::new_boolean(true).is_symbol());
+        assert!(!Value::new_boolean(true).is_string());
+        // character
         assert!(Value::new_character('a').is_character());
+        assert!(!Value::new_character('a').is_boolean());
+        assert!(!Value::new_character('a').is_symbol());
+        assert!(!Value::new_character('a').is_string());
+        // symbol
+        assert!(Value::new_symbol("abc").is_symbol());
+        assert!(!Value::new_symbol("abc").is_boolean());
+        assert!(!Value::new_symbol("abc").is_character());
+        assert!(!Value::new_symbol("abc").is_string());
+        // string
+        assert!(Value::new_string("abc").is_string());
+        assert!(!Value::new_string("abc").is_symbol());
+        assert!(!Value::new_string("abc").is_boolean());
+        assert!(!Value::new_string("abc").is_character());
     }
 
     #[test]
     fn test_to_values() {
+        // boolean
         assert_eq!(Value::new_boolean(true).to_bool().unwrap(), true);
         assert_eq!(Value::new_boolean(false).to_bool().unwrap(), false);
         assert!(Value::new_boolean(true).to_char().is_none());
+        assert!(Value::new_boolean(true).to_str().is_none());
+        // character
         assert_eq!(Value::new_character('a').to_char().unwrap(), 'a');
         assert!(Value::new_character('a').to_bool().is_none());
+        assert!(Value::new_character('a').to_str().is_none());
+        // symbol
+        assert!(Value::new_symbol("abc").to_char().is_none());
+        assert!(Value::new_symbol("abc").to_bool().is_none());
+        assert_eq!(Value::new_symbol("abc").to_str().unwrap(), "abc".to_string());
+        // string
+        assert!(Value::new_string("abc").to_char().is_none());
+        assert!(Value::new_string("abc").to_bool().is_none());
+        assert_eq!(Value::new_string("abc").to_str().unwrap(), "abc".to_string());
     }
 
     #[test]
@@ -275,5 +368,28 @@ mod test {
         assert_eq!(format!("{}", Value::new_boolean(true)), "#true");
         assert_eq!(format!("{}", Value::new_boolean(false)), "#false");
         assert_eq!(format!("{}", Value::new_character('a')), "#\\a");
+        assert_eq!(format!("{}", Value::new_symbol("abc")), "abc".to_string());
+        assert_eq!(format!("{}", Value::new_string("abc")), "abc".to_string());
+    }
+
+    #[test]
+    fn test_to_string() {
+        // the #[derive(Debug)] on Value implements to_string()
+        assert_eq!(Value::EmptyList.to_string(), "()");
+        assert_eq!(Value::new_boolean(true).to_string(), "#true");
+        assert_eq!(Value::new_boolean(false).to_string(), "#false");
+        assert_eq!(Value::new_character('a').to_string(), "#\\a");
+        assert_eq!(Value::new_symbol("abc").to_string(), "abc".to_string());
+        assert_eq!(Value::new_string("abc").to_string(), "abc".to_string());
+    }
+
+    #[test]
+    fn test_sym_ordering() {
+        assert!(Value::new_symbol("abc") < Value::new_symbol("def"));
+        assert!(Value::new_symbol("xyz") > Value::new_symbol("def"));
+        assert!(Value::new_symbol("abc") <= Value::new_symbol("def"));
+        assert!(Value::new_symbol("xyz") >= Value::new_symbol("def"));
+        assert!(Value::new_symbol("abc") == Value::new_symbol("abc"));
+        assert!(Value::new_symbol("bac") != Value::new_symbol("cab"));
     }
 }
