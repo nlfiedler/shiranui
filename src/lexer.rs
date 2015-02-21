@@ -112,7 +112,7 @@ impl fmt::Display for Token {
 }
 
 /// The `Lexer` struct holds the state of the lexical analyzer.
-struct Lexer<'a> {
+struct Lexer {
     // used only for error reports
     name: String,
     // the string being scanned
@@ -133,17 +133,17 @@ struct Lexer<'a> {
     chan: SyncSender<Token>
 }
 
-impl<'a> fmt::Display for Lexer<'a> {
+impl fmt::Display for Lexer {
 
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Lexer for '{}' at offset {}", self.name, self.pos)
     }
 }
 
-impl<'a> Lexer<'a> {
+impl Lexer {
 
     /// `new` constructs an instance of `Lexer` for the named input.
-    fn new(name: String, input: String, chan: SyncSender<Token>) -> Lexer<'a> {
+    fn new(name: String, input: String, chan: SyncSender<Token>) -> Lexer {
         Lexer {
             name: name,
             input: input,
@@ -734,11 +734,13 @@ fn lex_character(l: &mut Lexer) -> Option<StateFn> {
     } else if l.token_matches("#\\tab", folding) {
         l.emit_folded(TokenType::Character);
     } else {
-        // assert that it is a single character (e.g. #\a)
-        let prev = l.input.char_range_at_reverse(l.pos);
-        if !prev.ch.is_alphabetic() || l.token_length() > 3 {
-            return errorf(l, "invalid character literal");
+        // ensure we read at least one character
+        if l.token_length() < 3 {
+            if l.next() == None {
+                return errorf(l, "reached EOF in character literal");
+            }
         }
+        // ensure the next token is a delimiter
         if let Some(ch) = l.peek() {
             if !is_delimiter(ch) {
                 l.next();
@@ -747,7 +749,7 @@ fn lex_character(l: &mut Lexer) -> Option<StateFn> {
         }
         l.emit(TokenType::Character);
     }
-    Some(StateFn(lex_start))
+    return Some(StateFn(lex_start));
 }
 
 /// `lex_quote` processes the special quoting characters.
@@ -1510,7 +1512,7 @@ mod test {
 
     #[test]
     fn test_characters() {
-        let input = r#"#\a #\space #\newline #\t #\x #\x20 #\x65e5
+        let input = r#"#\a #\space #\newline #\t #\x #\y #\z #\^ #\) #\1 #\x20 #\x65e5
         #\alarm #\backspace #\delete #\escape #\null #\return #\tab"#;
         let mut vec = Vec::new();
         vec.push((TokenType::Character, "#\\a"));
@@ -1518,6 +1520,11 @@ mod test {
         vec.push((TokenType::Character, "#\\newline"));
         vec.push((TokenType::Character, "#\\t"));
         vec.push((TokenType::Character, "#\\x"));
+        vec.push((TokenType::Character, "#\\y"));
+        vec.push((TokenType::Character, "#\\z"));
+        vec.push((TokenType::Character, "#\\^"));
+        vec.push((TokenType::Character, "#\\)"));
+        vec.push((TokenType::Character, "#\\1"));
         vec.push((TokenType::Character, "#\\x20"));
         vec.push((TokenType::Character, "#\\x65e5"));
         vec.push((TokenType::Character, "#\\alarm"));
@@ -1530,7 +1537,7 @@ mod test {
         verify_success(input, vec);
         let mut map = HashMap::new();
         map.insert("#\\foo", "invalid character literal");
-        map.insert("#\\1", "invalid character literal");
+        map.insert("#\\", "reached EOF in character literal");
         verify_errors(map);
     }
 
