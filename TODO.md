@@ -5,61 +5,50 @@
 * Develop a crate containing both a library and a binary (the REPL)
 * Goal is R7RS compliance in the form of a library and an accompanying REPL
 
-## High Level
+## Road Map
 
-* `Character::from_str()` to convert char literals to a single character
-    * single characters
-    * character names
-    * hex scalar values
-* Terms and Sequences
+* Basic support for atomic values (boolean, character, etc)
+* Left-leaning red/black tree
+    * https://github.com/stevej/rustled (really old)
+    * https://github.com/petar/GoLLRB (might be easier to start from this, or one of its forks)
+    * https://www.cs.princeton.edu/~rs/talks/LLRB/LLRB.pdf
+    * https://gist.github.com/aspyct/3129371 (Java version)
 * Garbage collector
+* Pairs, vectors, byte vectors
+    * No use creating a "sequence" type
+    * Only lists are allowed when calling functions
+    * Most of bakeneko was special casing the pairs and vectors anyway
+    * Consider #[derive(Hash)] for an object identity hash, to help with loop detection
 * Parser
+    * Parser produces tuples of location and expression
+    * Interpreter/Compiler can then use location in error reporting
+    * Define a type for the tuple to make it easier to deal with
 * Basic interpreter
 * Byte code compiler
 * Stack-based byte code VM
+* Complex numbers (see crate https://crates.io/crates/num)
+* Rational numbers (see crate https://crates.io/crates/num)
+* Big integers (see crate https://crates.io/crates/num)
 * Hygienic macros
 * Derived expressions (e.g. `case`, `let`, `do`)
 * Standard procedures
 * REPL
 
-## Investigate
-
-* Find out what `Fn` and `FnMut` are about
-    * Appear in `std::ops`
-* Complex number support in Rust?
-    * Nope, but there is a crate that provides complex, bigint, and rational...
-    * https://crates.io/crates/num
-* Look at `std::collections` for available collections
-    * Sequences: Vec, RingBuf, DList, BitV
-    * Maps: HashMap, BTreeMap, VecMap
-    * Sets: HashSet, BTreeSet, BitVSet
-    * Misc: BinaryHeap
-* Use `static` to declare the unchanging singleton objects (e.g. `theVoid`, `theEmptyList`)
-    * But not the mutable evironment vars, such as `theNullEnvironment`
-        * Unlikely that rustc would consider them immutable in this case
-* Is there something like `defer` for Rust?
-    * Implement the `Drop` trait for such resources in order to clean up
-    * In addition, there is the `Finally` trait in `std::finally`
-* Is there something like [gocheck](https://labix.org/gocheck) for Rust?
-    * Something akin to RSpec: https://github.com/farcaller/shiny
-    * With pattern matching it should be easy to write terse test code
-        * `assert_eq!("4".parse::<u32>(), Some(4));`
-        * `assert_eq!("j".parse::<u32>(), None);`
-    * See also `Result` in `std::result` for `.ok()`
-    * See also `Option` in `std::option` for `.expect()`
-
 ## Improvements to Make over Bakeneko
+
+### Testing
+
+* Try https://github.com/farcaller/shiny (akin to RSpec)
+* Write many of the tests in Scheme itself
+    * see https://code.google.com/p/chibi-scheme/
+    * see https://github.com/fitzgen/oxischeme
+    * Look for a Scheme testing framework
 
 ### Parser
 
 * The result of parsing/expanding should already be wrapped with `(begin)`.
 * Parsing and expanding should be combined into one step.
     * Fine to have private API for testing purposes, but public API should be a single `fn`.
-
-## Environment
-
-* Will want a left-leaning red-black tree implementation at some point.
-    * https://github.com/stevej/rustled
 
 ### Data Types
 

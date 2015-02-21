@@ -17,53 +17,165 @@
 //! Atoms (symbols, strings, numbers, booleans, characters) in Scheme.
 //!
 
-// TODO: consider if a trait for Character is needed (what to call it?)
-// TODO: consider how the parser will produce locatable characters
-
 // TODO: remove once the slice vs [..] warnings settle down
 #![allow(deprecated)]
+
+// TODO: remove once the code stabilizes
+#![allow(dead_code)]
 
 use std::char;
 use std::error::Error;
 use std::fmt;
 use std::num;
-use std::str;
 
-#[derive(Debug, PartialEq)]
-pub struct Character(char);
+#[derive(Copy, Eq, Hash, PartialEq, Debug)]
+pub enum Value {
+    EmptyList,
+    Character(char),
+    Boolean(bool),
+    // String(String),
+    // Symbol(String),
+    // Integer(i64),
+    // Float(f64),
+    // Complex(f64, f64),
+    // Rational(i64, i64),
+    // Pair(),
+    // Vector(),
+    // ByteVector(),
+    // Procedure(),
+    // Port(),
+    // Nil or Void?
+}
 
-impl str::FromStr for Character {
-    type Err = ParseCharError;
+// TODO: YAGNI: Atom.CompareTo() is only needed for comparing symbols and numbers
+// TODO: YAGNI: Atom.EqualTo() is used for equal?, eq?, and eqv? and a lot of symbol matching
+// TODO: for symbol matching, would be brilliant to handle like Erlang does with atoms
+//       (probably #[derive(Eq)] will do the trick already)
 
-    fn from_str(s: &str) -> Result<Character, ParseCharError> {
-        match s {
-            "#\\newline"   => Ok(Character('\n')),
-            "#\\space"     => Ok(Character(' ')),
-            "#\\return"    => Ok(Character('\r')),
-            "#\\tab"       => Ok(Character('\t')),
-            "#\\alarm"     => Ok(Character('\x07')),
-            "#\\backspace" => Ok(Character('\x08')),
-            "#\\delete"    => Ok(Character('\x7f')),
-            "#\\escape"    => Ok(Character('\x1b')),
-            "#\\null"      => Ok(Character('\0')),
-            _ => {
-                if s.len() > 3 && s.starts_with("#\\x") {
-                    match num::from_str_radix::<u32>(s.slice_from(3), 16) {
-                        Ok(code) => {
-                            match char::from_u32(code) {
-                                Some(ch) => Ok(Character(ch)),
-                                None => Err(ParseCharError{ kind: CharErrorKind::InvalidUTF })
-                            }
-                        },
-                        Err(_) => {
-                            Err(ParseCharError{ kind: CharErrorKind::InvalidHex })
+impl Value {
+
+    /// `new_boolean` constructs a `Boolean` from the given `bool`.
+    pub fn new_boolean(b: bool) -> Value {
+        Value::Boolean(b)
+    }
+
+    /// `new_character` constructs a `Character` from the given `char`.
+    pub fn new_character(ch: char) -> Value {
+        Value::Character(ch)
+    }
+
+    /// `is_boolean` returns true if the value is a boolean.
+    pub fn is_boolean(&self) -> bool {
+        match *self {
+            Value::Boolean(_) => true,
+            _ => false,
+        }
+    }
+
+    /// `is_boolean` returns true if the value is a character.
+    pub fn is_character(&self) -> bool {
+        match *self {
+            Value::Character(_) => true,
+            _ => false,
+        }
+    }
+
+    // pub fn is_byte_vector(&self) -> bool;
+    // pub fn is_complex(&self) -> bool;
+    // pub fn is_float(&self) -> bool;
+    // pub fn is_integer(&self) -> bool;
+    // pub fn is_pair(&self) -> bool;
+    // pub fn is_port(&self) -> bool;
+    // pub fn is_procedure(&self) -> bool;
+    // pub fn is_rational(&self) -> bool;
+    // pub fn is_string(&self) -> bool;
+    // pub fn is_symbol(&self) -> bool;
+    // pub fn is_vector(&self) -> bool;
+
+    /// `to_bool` extracts the boolean value; returns `None` if not Boolean.
+    pub fn to_bool(&self) -> Option<bool> {
+        match *self {
+            Value::Boolean(b) => Some(b),
+            _ => None,
+        }
+    }
+
+    /// `to_char` extracts the character value; returns `None` if not Character.
+    pub fn to_char(&self) -> Option<char> {
+        match *self {
+            Value::Character(ch) => Some(ch),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for Value {
+
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Value::EmptyList => write!(f, "()"),
+            Value::Boolean(b) => write!(f, "#{}", b),
+            Value::Character(ch) => write!(f, "#\\{}", ch),
+        }
+    }
+}
+
+/// `bool_from_str` returns a `bool` based on the given string input,
+/// which must be one of "#t", "#f", "#true", or "#false".
+pub fn bool_from_str(s: &str) -> Result<bool, ParseBoolError> {
+    match s {
+        "#t" | "#true"  => Ok(true),
+        "#f" | "#false" => Ok(false),
+        _               => Err(ParseBoolError { _priv: () }),
+    }
+}
+
+/// An error returned when parsing a `bool` from a string fails.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParseBoolError { _priv: () }
+
+impl fmt::Display for ParseBoolError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        "provided string was not `#t`, `#true`, `#f`, or `#false`".fmt(f)
+    }
+}
+
+impl Error for ParseBoolError {
+    fn description(&self) -> &str {
+        "failed to parse bool"
+    }
+}
+
+/// `char_from_str` returns a `char` based on the given string input,
+/// which must be one of the acceptable Scheme character literals.
+pub fn char_from_str(s: &str) -> Result<char, ParseCharError> {
+    match s {
+        "#\\newline"   => Ok('\n'),
+        "#\\space"     => Ok(' '),
+        "#\\return"    => Ok('\r'),
+        "#\\tab"       => Ok('\t'),
+        "#\\alarm"     => Ok('\x07'),
+        "#\\backspace" => Ok('\x08'),
+        "#\\delete"    => Ok('\x7f'),
+        "#\\escape"    => Ok('\x1b'),
+        "#\\null"      => Ok('\0'),
+        _ => {
+            if s.len() > 3 && s.starts_with("#\\x") {
+                match num::from_str_radix::<u32>(s.slice_from(3), 16) {
+                    Ok(code) => {
+                        match char::from_u32(code) {
+                            Some(ch) => Ok(ch),
+                            None => Err(ParseCharError{ kind: CharErrorKind::InvalidUTF })
                         }
+                    },
+                    Err(_) => {
+                        Err(ParseCharError{ kind: CharErrorKind::InvalidHex })
                     }
-                } else if s.len() == 3 {
-                    Ok(Character(s.char_at(2)))
-                } else {
-                    Err(ParseCharError{ kind: CharErrorKind::Unrecognized })
                 }
+            } else if s.len() == 3 {
+                Ok(s.char_at(2))
+            } else {
+                Err(ParseCharError{ kind: CharErrorKind::Unrecognized })
             }
         }
     }
@@ -99,27 +211,69 @@ impl Error for ParseCharError {
 #[cfg(test)]
 mod test {
 
-    use super::{Character, CharErrorKind, ParseCharError};
+    use super::{bool_from_str, char_from_str, CharErrorKind, ParseCharError, Value};
+
+    #[test]
+    fn test_bool_from_str() {
+        assert_eq!(bool_from_str("#t").unwrap(), true);
+        assert_eq!(bool_from_str("#true").unwrap(), true);
+        assert_eq!(bool_from_str("#f").unwrap(), false);
+        assert_eq!(bool_from_str("#false").unwrap(), false);
+        // error cases
+        assert!(bool_from_str("#truce").is_err());
+        assert!(bool_from_str("#falls").is_err());
+    }
 
     #[test]
     fn test_char_from_str() {
-        assert_eq!("#\\newline".parse().unwrap(), Character('\n'));
-        assert_eq!("#\\space".parse().unwrap(), Character(' '));
-        assert_eq!("#\\return".parse().unwrap(), Character('\r'));
-        assert_eq!("#\\tab".parse().unwrap(), Character('\t'));
-        assert_eq!("#\\alarm".parse().unwrap(), Character('\x07'));
-        assert_eq!("#\\backspace".parse().unwrap(), Character('\x08'));
-        assert_eq!("#\\delete".parse().unwrap(), Character('\x7f'));
-        assert_eq!("#\\escape".parse().unwrap(), Character('\x1b'));
-        assert_eq!("#\\null".parse().unwrap(), Character('\0'));
-        assert_eq!("#\\y".parse().unwrap(), Character('y'));
-        assert_eq!("#\\x65e5".parse().unwrap(), Character('日'));
+        assert_eq!(char_from_str("#\\newline").unwrap(), '\n');
+        assert_eq!(char_from_str("#\\space").unwrap(), ' ');
+        assert_eq!(char_from_str("#\\return").unwrap(), '\r');
+        assert_eq!(char_from_str("#\\tab").unwrap(), '\t');
+        assert_eq!(char_from_str("#\\alarm").unwrap(), '\x07');
+        assert_eq!(char_from_str("#\\backspace").unwrap(), '\x08');
+        assert_eq!(char_from_str("#\\delete").unwrap(), '\x7f');
+        assert_eq!(char_from_str("#\\escape").unwrap(), '\x1b');
+        assert_eq!(char_from_str("#\\null").unwrap(), '\0');
+        assert_eq!(char_from_str("#\\y").unwrap(), 'y');
+        assert_eq!(char_from_str("#\\x65e5").unwrap(), '日');
         // error cases
-        assert_eq!("#\\xZZZ".parse::<Character>().unwrap_err(),
+        assert_eq!(char_from_str("#\\xZZZ").unwrap_err(),
                    ParseCharError{ kind: CharErrorKind::InvalidHex });
-        assert_eq!("#\\xD801".parse::<Character>().unwrap_err(),
+        assert_eq!(char_from_str("#\\xD801").unwrap_err(),
                    ParseCharError{ kind: CharErrorKind::InvalidUTF });
-        assert_eq!("#\\foobar".parse::<Character>().unwrap_err(),
+        assert_eq!(char_from_str("#\\foobar").unwrap_err(),
                    ParseCharError{ kind: CharErrorKind::Unrecognized });
+    }
+
+    #[test]
+    fn test_new_values() {
+        assert_eq!(Value::new_boolean(true), Value::Boolean(true));
+        assert_eq!(Value::new_character('a'), Value::Character('a'));
+    }
+
+    #[test]
+    fn test_value_types() {
+        assert!(Value::new_boolean(true).is_boolean());
+        assert!(!Value::new_boolean(true).is_character());
+        assert!(!Value::new_character('a').is_boolean());
+        assert!(Value::new_character('a').is_character());
+    }
+
+    #[test]
+    fn test_to_values() {
+        assert_eq!(Value::new_boolean(true).to_bool().unwrap(), true);
+        assert_eq!(Value::new_boolean(false).to_bool().unwrap(), false);
+        assert!(Value::new_boolean(true).to_char().is_none());
+        assert_eq!(Value::new_character('a').to_char().unwrap(), 'a');
+        assert!(Value::new_character('a').to_bool().is_none());
+    }
+
+    #[test]
+    fn test_fmt_values() {
+        assert_eq!(format!("{}", Value::EmptyList), "()");
+        assert_eq!(format!("{}", Value::new_boolean(true)), "#true");
+        assert_eq!(format!("{}", Value::new_boolean(false)), "#false");
+        assert_eq!(format!("{}", Value::new_character('a')), "#\\a");
     }
 }
