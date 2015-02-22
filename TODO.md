@@ -13,6 +13,7 @@
     * https://github.com/petar/GoLLRB (might be easier to start from this, or one of its forks)
     * https://www.cs.princeton.edu/~rs/talks/LLRB/LLRB.pdf
     * https://gist.github.com/aspyct/3129371 (Java version)
+    * http://www.cs.princeton.edu/~rs/talks/LLRB/Java/RedBlackBST.java (canonical Java code)
 * Garbage collector
 * Pairs, vectors, byte vectors
     * No use creating a "sequence" type

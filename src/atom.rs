@@ -36,7 +36,7 @@ pub enum Value {
     Boolean(bool),
     Symbol(String),
     String(String),
-    // Integer(i64),
+    Integer(i64),
     // Float(f64),
     // Complex(f64, f64),
     // Rational(i64, i64),
@@ -68,6 +68,11 @@ impl Value {
     /// `new_string` constructs a `String` from the given value.
     pub fn new_string(sym: &str) -> Value {
         Value::String(sym.to_string())
+    }
+
+    /// `new_integer` constructs an `Integer` from the given value.
+    pub fn new_integer(v: i64) -> Value {
+        Value::Integer(v)
     }
 
     /// `is_boolean` returns true if the value is a boolean.
@@ -102,10 +107,17 @@ impl Value {
         }
     }
 
+    /// `is_integer` returns true if the value is an integer.
+    pub fn is_integer(&self) -> bool {
+        match *self {
+            Value::Integer(_) => true,
+            _ => false,
+        }
+    }
+
     // pub fn is_byte_vector(&self) -> bool;
     // pub fn is_complex(&self) -> bool;
     // pub fn is_float(&self) -> bool;
-    // pub fn is_integer(&self) -> bool;
     // pub fn is_pair(&self) -> bool;
     // pub fn is_port(&self) -> bool;
     // pub fn is_procedure(&self) -> bool;
@@ -140,6 +152,14 @@ impl Value {
             _ => None,
         }
     }
+
+    /// `to_int` extracts the integer value; returns `None` if not Integer.
+    pub fn to_int(&self) -> Option<i64> {
+        match *self {
+            Value::Integer(v) => Some(v),
+            _ => None,
+        }
+    }
 }
 
 impl Display for Value {
@@ -151,6 +171,7 @@ impl Display for Value {
             Value::Character(ch) => write!(f, "#\\{}", ch),
             Value::Symbol(ref sym) => write!(f, "{}", sym),
             Value::String(ref s) => write!(f, "{}", s),
+            Value::Integer(v) => write!(f, "{}", v),
         }
     }
 }
@@ -173,7 +194,12 @@ impl PartialOrd for Value {
                     _ => None
                 }
             },
-            // TODO: add number comparison
+            Value::Integer(ref lhs) => {
+                match *other {
+                    Value::Integer(ref rhs) => Some(lhs.cmp(rhs)),
+                    _ => None
+                }
+            },
             _ => None,
         }
     }
@@ -315,6 +341,7 @@ mod test {
         assert_eq!(Value::new_character('a'), Value::Character('a'));
         assert_eq!(Value::new_symbol("abc"), Value::Symbol("abc".to_string()));
         assert_eq!(Value::new_string("abc"), Value::String("abc".to_string()));
+        assert_eq!(Value::new_integer(1234), Value::Integer(1234));
     }
 
     #[test]
@@ -324,21 +351,31 @@ mod test {
         assert!(!Value::new_boolean(true).is_character());
         assert!(!Value::new_boolean(true).is_symbol());
         assert!(!Value::new_boolean(true).is_string());
+        assert!(!Value::new_boolean(true).is_integer());
         // character
         assert!(Value::new_character('a').is_character());
         assert!(!Value::new_character('a').is_boolean());
         assert!(!Value::new_character('a').is_symbol());
         assert!(!Value::new_character('a').is_string());
+        assert!(!Value::new_character('a').is_integer());
         // symbol
         assert!(Value::new_symbol("abc").is_symbol());
         assert!(!Value::new_symbol("abc").is_boolean());
         assert!(!Value::new_symbol("abc").is_character());
         assert!(!Value::new_symbol("abc").is_string());
+        assert!(!Value::new_symbol("abc").is_integer());
         // string
         assert!(Value::new_string("abc").is_string());
         assert!(!Value::new_string("abc").is_symbol());
         assert!(!Value::new_string("abc").is_boolean());
         assert!(!Value::new_string("abc").is_character());
+        assert!(!Value::new_string("abc").is_integer());
+        // integer
+        assert!(Value::new_integer(1234).is_integer());
+        assert!(!Value::new_integer(1234).is_string());
+        assert!(!Value::new_integer(1234).is_symbol());
+        assert!(!Value::new_integer(1234).is_boolean());
+        assert!(!Value::new_integer(1234).is_character());
     }
 
     #[test]
@@ -348,18 +385,27 @@ mod test {
         assert_eq!(Value::new_boolean(false).to_bool().unwrap(), false);
         assert!(Value::new_boolean(true).to_char().is_none());
         assert!(Value::new_boolean(true).to_str().is_none());
+        assert!(Value::new_boolean(true).to_int().is_none());
         // character
         assert_eq!(Value::new_character('a').to_char().unwrap(), 'a');
         assert!(Value::new_character('a').to_bool().is_none());
         assert!(Value::new_character('a').to_str().is_none());
+        assert!(Value::new_character('a').to_int().is_none());
         // symbol
         assert!(Value::new_symbol("abc").to_char().is_none());
         assert!(Value::new_symbol("abc").to_bool().is_none());
         assert_eq!(Value::new_symbol("abc").to_str().unwrap(), "abc".to_string());
+        assert!(Value::new_symbol("abc").to_int().is_none());
         // string
         assert!(Value::new_string("abc").to_char().is_none());
         assert!(Value::new_string("abc").to_bool().is_none());
         assert_eq!(Value::new_string("abc").to_str().unwrap(), "abc".to_string());
+        assert!(Value::new_string("abc").to_int().is_none());
+        // integer
+        assert!(Value::new_integer(1234).to_char().is_none());
+        assert!(Value::new_integer(1234).to_bool().is_none());
+        assert!(Value::new_integer(1234).to_str().is_none());
+        assert_eq!(Value::new_integer(1234).to_int().unwrap(), 1234);
     }
 
     #[test]
@@ -370,6 +416,7 @@ mod test {
         assert_eq!(format!("{}", Value::new_character('a')), "#\\a");
         assert_eq!(format!("{}", Value::new_symbol("abc")), "abc".to_string());
         assert_eq!(format!("{}", Value::new_string("abc")), "abc".to_string());
+        assert_eq!(format!("{}", Value::new_integer(1234)), "1234".to_string());
     }
 
     #[test]
@@ -381,6 +428,7 @@ mod test {
         assert_eq!(Value::new_character('a').to_string(), "#\\a");
         assert_eq!(Value::new_symbol("abc").to_string(), "abc".to_string());
         assert_eq!(Value::new_string("abc").to_string(), "abc".to_string());
+        assert_eq!(Value::new_integer(1234).to_string(), "1234".to_string());
     }
 
     #[test]
@@ -391,5 +439,15 @@ mod test {
         assert!(Value::new_symbol("xyz") >= Value::new_symbol("def"));
         assert!(Value::new_symbol("abc") == Value::new_symbol("abc"));
         assert!(Value::new_symbol("bac") != Value::new_symbol("cab"));
+    }
+
+    #[test]
+    fn test_int_ordering() {
+        assert!(Value::new_integer(1234) < Value::new_integer(5678));
+        assert!(Value::new_integer(5678) > Value::new_integer(1234));
+        assert!(Value::new_integer(1234) <= Value::new_integer(5678));
+        assert!(Value::new_integer(5678) >= Value::new_integer(1234));
+        assert!(Value::new_integer(1234) == Value::new_integer(1234));
+        assert!(Value::new_integer(4321) != Value::new_integer(1234));
     }
 }
