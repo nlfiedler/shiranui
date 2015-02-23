@@ -7,13 +7,6 @@
 
 ## Road Map
 
-* Basic support for atomic values (boolean, character, etc)
-* Left-leaning red/black tree
-    * https://github.com/stevej/rustled (really old)
-    * https://github.com/petar/GoLLRB (might be easier to start from this, or one of its forks)
-    * https://www.cs.princeton.edu/~rs/talks/LLRB/LLRB.pdf
-    * https://gist.github.com/aspyct/3129371 (Java version)
-    * http://www.cs.princeton.edu/~rs/talks/LLRB/Java/RedBlackBST.java (canonical Java code)
 * Garbage collector
 * Pairs, vectors, byte vectors
     * No use creating a "sequence" type
@@ -53,6 +46,8 @@
 
 ### Data Types
 
+* Environment, sometimes referred to elsewhere as an "activation"
+    * Use the std::collections::BTreeMap to map symbols to values
 * New Serializable trait will provide API for writing and reading elements in binary.
     * Individual things know how to serialize and deserialize themselves.
 * New Runnable trait will provide a `run()` function.
