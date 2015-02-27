@@ -53,6 +53,7 @@ pub enum TokenType {
     Error,
     OpenParen,
     CloseParen,
+    Dot,
     Comment,
     String,
     Quote,
@@ -77,6 +78,7 @@ impl fmt::Display for TokenType {
             TokenType::Error => write!(f, "Error"),
             TokenType::OpenParen => write!(f, "OpenParen"),
             TokenType::CloseParen => write!(f, "CloseParen"),
+            TokenType::Dot => write!(f, "Dot"),
             TokenType::Comment => write!(f, "Comment"),
             TokenType::String => write!(f, "String"),
             TokenType::Quote => write!(f, "Quote"),
@@ -992,9 +994,9 @@ fn lex_dot(l: &mut Lexer) -> Option<StateFn> {
         l.rewind();
         return Some(StateFn(lex_number));
     }
-    // and if we ran out of tokens, it's an identifier
-    l.rewind();
-    return Some(StateFn(lex_identifier));
+    // and if we ran out of tokens, it is the '.' special symbol
+    l.emit(TokenType::Dot);
+    Some(StateFn(lex_identifier))
 }
 
 /// `lex_explicit_sign` decides what should be done with the explicit sign
@@ -1682,7 +1684,8 @@ mod test {
         map.insert("-..a", (TokenType::Identifier, "-..a"));
         map.insert(".a", (TokenType::Identifier, ".a"));
         map.insert("..a", (TokenType::Identifier, "..a"));
-        map.insert(".", (TokenType::Identifier, "."));
+        // the . is special, not really an identifier
+        map.insert(".", (TokenType::Dot, "."));
         map.insert("..", (TokenType::Identifier, ".."));
         map.insert("...", (TokenType::Identifier, "..."));
         map.insert("!", (TokenType::Identifier, "!"));
