@@ -177,7 +177,7 @@ impl Lexer {
         let text = self.input.as_slice().slice(self.start, self.pos);
         let _ = self.chan.send(Token {
             typ: t,
-            val: fold_case(text),
+            val: text.to_lowercase(),
             row: self.row,
             col: self.col
         });
@@ -209,7 +209,7 @@ impl Lexer {
         }
         let output;
         if self.folding {
-            output = fold_case(text);
+            output = text.to_lowercase();
         } else {
             output = text.to_string();
         }
@@ -233,7 +233,7 @@ impl Lexer {
     fn token_matches(&mut self, query: &str, folding: bool) -> bool {
         let text = self.input.as_slice().slice(self.start, self.pos);
         if folding {
-            let lower_text = fold_case(text);
+            let lower_text = text.to_lowercase();
             lower_text.as_slice() == query
         } else {
             text == query
@@ -279,7 +279,7 @@ impl Lexer {
         if self.input.len() - self.pos >= q_len {
             let text = self.input.as_slice().slice(self.pos, self.pos + q_len);
             return if folding {
-                let lower_text = fold_case(text);
+                let lower_text = text.to_lowercase();
                 lower_text.as_slice() == query
             } else {
                 text == query
@@ -1163,11 +1163,6 @@ fn sanitize_input(input: &str) -> String {
     input.replace("\r\n", "\n").replace("\r", "\n")
 }
 
-/// `fold_case` converts the given `str` to all lowercase.
-fn fold_case(s: &str) -> String {
-    s.chars().map(|c| c.to_lowercase()).collect::<String>()
-}
-
 /// `replace_escapes` replaces any \xNNNN; escape sequences with the Unicode
 /// code point identified by the NNNN hexadecimal value, where NNNN can be
 /// two, three, or four hexadecimal digits. The code point must be valid.
@@ -1229,7 +1224,7 @@ fn replace_escapes(text: &str) -> Result<String, &'static str> {
 #[cfg(test)]
 mod test {
 
-    use super::{lex, fold_case, replace_escapes, sanitize_input, TokenType};
+    use super::{lex, replace_escapes, sanitize_input, TokenType};
     use std::collections::HashMap;
     use std::vec::Vec;
 
@@ -1318,14 +1313,6 @@ mod test {
         assert_eq!(sanitize_input("a\rb\rc\r"), "a\nb\nc\n");
         // Unix style, no change
         assert_eq!(sanitize_input("a\nb\nc\n"), "a\nb\nc\n");
-    }
-
-    #[test]
-    fn test_fold_case() {
-        assert_eq!(fold_case("abc"), "abc");
-        assert_eq!(fold_case("ABC"), "abc");
-        assert_eq!(fold_case("aBc"), "abc");
-        assert_eq!(fold_case("AbC"), "abc");
     }
 
     #[test]
