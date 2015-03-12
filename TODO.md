@@ -8,6 +8,7 @@
 ## Road Map
 
 * Garbage collector
+* Environment: basically use mal/rust/env.rs, but with BTreeMap
 * Pairs, vectors, byte vectors
     * No use creating a "sequence" type
     * Only lists are allowed when calling functions
@@ -27,6 +28,7 @@
 * Derived expressions (e.g. `case`, `let`, `do`)
 * Standard procedures
 * REPL
+    * Readline support: https://github.com/gwenn/rust-readline
 
 ## Improvements to Make over Bakeneko
 
