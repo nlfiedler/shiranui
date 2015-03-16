@@ -4,7 +4,6 @@ Eventually this will be a complete [Scheme](http://scheme-reports.org) interpret
 
 ### TODO
 
-* Lexer
 * Parser
 * Basic interpreter
 * Byte code compiler
