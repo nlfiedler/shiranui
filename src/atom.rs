@@ -17,12 +17,6 @@
 //! Atoms (symbols, strings, numbers, booleans, characters) in Scheme.
 //!
 
-// TODO: remove once the slice vs [..] warnings settle down
-#![allow(deprecated)]
-
-// TODO: remove once the code stabilizes
-#![allow(dead_code)]
-
 use std::char;
 use std::cmp::{PartialOrd, Ordering};
 use std::error::Error;
@@ -248,7 +242,7 @@ pub fn char_from_str(s: &str) -> Result<char, ParseCharError> {
         "#\\null"      => Ok('\0'),
         _ => {
             if s.len() > 3 && s.starts_with("#\\x") {
-                match num::from_str_radix::<u32>(s.slice_from(3), 16) {
+                match num::from_str_radix::<u32>(&s[3..], 16) {
                     Ok(code) => {
                         match char::from_u32(code) {
                             Some(ch) => Ok(ch),
@@ -260,7 +254,7 @@ pub fn char_from_str(s: &str) -> Result<char, ParseCharError> {
                     }
                 }
             } else if s.len() == 3 {
-                Ok(s.char_at(2))
+                Ok(s[2..].chars().next().unwrap())
             } else {
                 Err(ParseCharError{ kind: CharErrorKind::Unrecognized })
             }

@@ -7,6 +7,14 @@
 
 ## Road Map
 
+* Try turning off the feature flags and see what squawks
+    * Need a `to_lowercase()`
+* Look at rustc to see how it efficiently lexes input
+    * See `src/libsyntax/parse/lexer/mod.rs` in Rust source tree
+    * In particular, how does it avoid using the str_char feature?
+    * Alex suggests using CharIndices to move forward and backward (peek, next, backup)
+    * For rewind, Alex suggests using a clone of the CharIndices object to reset to the last remembered position
+    * The challenge is using CharIndices in Lexer struct and getting the lifetimes right
 * Garbage collector
 * Environment: basically use mal/rust/env.rs, but with BTreeMap
 * Pairs, vectors, byte vectors

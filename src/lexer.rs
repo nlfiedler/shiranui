@@ -39,9 +39,6 @@
 //! report the error via a special error token, sent via the channel.
 //!
 
-// TODO: remove once the slice vs [..] warnings settle down
-#![allow(deprecated)]
-
 use std::char;
 use std::fmt;
 use std::num;
@@ -161,7 +158,7 @@ impl Lexer {
 
     /// emit passes the current token back to the client via the channel.
     fn emit(&mut self, t: TokenType) {
-        let text = self.input.as_slice().slice(self.start, self.pos);
+        let text = &self.input[self.start..self.pos];
         let _ = self.chan.send(Token {
             typ: t,
             val: text.to_string(),
@@ -174,7 +171,7 @@ impl Lexer {
     /// `emit_folded` will fold the case of the token and then emit the
     /// identifier to the token channel.
     fn emit_folded(&mut self, t: TokenType) {
-        let text = self.input.as_slice().slice(self.start, self.pos);
+        let text = &self.input[self.start..self.pos];
         let _ = self.chan.send(Token {
             typ: t,
             val: text.to_lowercase(),
@@ -205,7 +202,7 @@ impl Lexer {
         if let Some(id) = ident {
             text = id;
         } else {
-            text = self.input.as_slice().slice(self.start, self.pos);
+            text = &self.input[self.start..self.pos];
         }
         let output;
         if self.folding {
@@ -231,10 +228,10 @@ impl Lexer {
     /// text exactly (case-sensitive), and false otherwise. If the `folding`
     /// argument is true, the string is lowercased before comparing.
     fn token_matches(&mut self, query: &str, folding: bool) -> bool {
-        let text = self.input.as_slice().slice(self.start, self.pos);
+        let text = &self.input[self.start..self.pos];
         if folding {
             let lower_text = text.to_lowercase();
-            lower_text.as_slice() == query
+            &lower_text[..] == query
         } else {
             text == query
         }
@@ -277,10 +274,10 @@ impl Lexer {
     fn look_ahead(&mut self, query: &str, folding: bool) -> bool {
         let q_len = query.len();
         if self.input.len() - self.pos >= q_len {
-            let text = self.input.as_slice().slice(self.pos, self.pos + q_len);
+            let text = &self.input[self.pos..self.pos + q_len];
             return if folding {
                 let lower_text = text.to_lowercase();
-                lower_text.as_slice() == query
+                &lower_text[..] == query
             } else {
                 text == query
             }
@@ -298,7 +295,7 @@ impl Lexer {
         // if width is zero, next() reached eof, don't adjust anything this time
         if self.width > 0 {
             self.pos -= self.width;
-            if self.input.char_at(self.pos) == '\n' {
+            if self.input[self.pos..].chars().next().unwrap() == '\n' {
                 // move row/col to end of previously scanned line
                 self.row -= 1;
                 self.compute_column();
@@ -327,14 +324,14 @@ impl Lexer {
     /// `compute_column` updates the `col` field to the correct value after
     /// having moved the `pos` to its new position within the `input` text.
     fn compute_column(&mut self) {
-        let prior = self.input.slice_to(self.pos);
+        let prior = &self.input[..self.pos];
         // assume there is no newline within this slice
         let mut nl = 0;
         if let Some(pos) = prior.rfind('\n') {
             // don't count the newline itself
             nl = pos + 1;
         }
-        let subset = self.input.slice(nl, self.pos);
+        let subset = &self.input[nl..self.pos];
         self.col = subset.chars().count();
     }
 
@@ -342,7 +339,7 @@ impl Lexer {
     fn accept(&mut self, valid: &str) -> bool {
         match self.peek() {
             Some(ch) => {
-                if valid.contains_char(ch) {
+                if valid.contains(ch) {
                     // consume the character
                     self.next();
                     return true;
@@ -359,7 +356,7 @@ impl Lexer {
         loop {
             match self.peek() {
                 Some(ch) => {
-                    if valid.contains_char(ch) {
+                    if valid.contains(ch) {
                         // consume the character
                         self.next();
                     } else {
@@ -386,7 +383,7 @@ pub fn lex(name: &str, input: &str) -> Receiver<Token> {
     let thread_tx = tx.clone();
     let thread_name = name.to_string();
 
-    thread::Thread::spawn(move || {
+    thread::spawn(move || {
         let mut lexer = Lexer::new(thread_name, sanitized, thread_tx);
         // inform the compiler what the type of state _really_ is
         let mut state = lex_start as fn(&mut Lexer) -> Option<StateFn>;
@@ -437,8 +434,11 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
             '[' | ']' | '{' | '}' => {
                 return errorf(l, "use of reserved character");
             },
-            '\'' | '`' | ',' => {
+            '\'' | '`' => {
                 return Some(StateFn(lex_quote));
+            },
+            ',' => {
+                return Some(StateFn(lex_unquote));
             },
             '0' ... '9' => {
                 l.backup();
@@ -496,9 +496,9 @@ fn lex_string(l: &mut Lexer) -> Option<StateFn> {
             },
             '"' => {
                 // reached the end of the string
-                match replace_escapes(text.as_slice()) {
+                match replace_escapes(&text[..]) {
                     Ok(escaped) => {
-                        l.emit_text(TokenType::String, escaped.as_slice());
+                        l.emit_text(TokenType::String, &escaped[..]);
                         return Some(StateFn(lex_start));
                     },
                     Err(msg) => {
@@ -702,7 +702,7 @@ fn lex_x_character(l: &mut Lexer) -> Option<StateFn> {
                 }
             }
             // as with numeric literals, some validation happens at parse time
-            l.emit_text(TokenType::Character, text.as_slice());
+            l.emit_text(TokenType::Character, &text[..]);
         }
     }
     Some(StateFn(lex_start))
@@ -754,19 +754,20 @@ fn lex_character(l: &mut Lexer) -> Option<StateFn> {
     return Some(StateFn(lex_start));
 }
 
-/// `lex_quote` processes the special quoting characters.
+/// `lex_quote` processes the special quoting characters (' and `).
 fn lex_quote(l: &mut Lexer) -> Option<StateFn> {
-    // we already know it's one of the quoting characters, just need
-    // to check if it is the two character ,@ form
-    let prev = l.input.char_range_at_reverse(l.pos);
-    if prev.ch == ',' {
-        if let Some(ch) = l.peek() {
-            if ch == '@' {
-                l.next();
-            }
-        } else {
-            return errorf(l, "reached EOF in quote expression");
+    l.emit(TokenType::Quote);
+    Some(StateFn(lex_start))
+}
+
+/// `lex_unquote` processes the special unquote characters (, and ,@).
+fn lex_unquote(l: &mut Lexer) -> Option<StateFn> {
+    if let Some(ch) = l.peek() {
+        if ch == '@' {
+            l.next();
         }
+    } else {
+        return errorf(l, "reached EOF in quote expression");
     }
     l.emit(TokenType::Quote);
     Some(StateFn(lex_start))
@@ -839,7 +840,7 @@ impl NumberLexer {
 
     /// `accept_integer_r` attempts to read an integer, possibly inexact.
     fn accept_integer_r(&mut self, l: &mut Lexer, tentative: bool) -> Result<u8, &'static str> {
-        let ok = l.accept_run(self.digits.as_slice());
+        let ok = l.accept_run(&self.digits[..]);
         if !tentative && !ok {
             return Err("malformed unsigned integer");
         }
@@ -869,7 +870,7 @@ impl NumberLexer {
         } else if self.digits.len() == 10 && l.accept(".") {
             self.is_float = true;
             if self.is_exact {
-                l.accept_run(self.digits.as_slice());
+                l.accept_run(&self.digits[..]);
             } else {
                 l.accept_run("#");
             }
@@ -877,7 +878,7 @@ impl NumberLexer {
         if l.accept("dDeEfFlLsS") {
             self.is_float = true;
             l.accept("+-");
-            l.accept_run(self.digits.as_slice());
+            l.accept_run(&self.digits[..]);
         }
         Ok(0)
     }
@@ -1054,7 +1055,7 @@ fn lex_identifier(l: &mut Lexer) -> Option<StateFn> {
             return errorf(l, "improperly terminated identifier");
         }
     }
-    l.emit_identifier(Some(ident.as_slice()));
+    l.emit_identifier(Some(&ident[..]));
     return Some(StateFn(lex_start));
 }
 
@@ -1090,9 +1091,9 @@ fn lex_pipe_identifier(l: &mut Lexer) -> Option<StateFn> {
             }
         } else if ch == '|' {
             ident.push(ch);
-            match replace_escapes(ident.as_slice()) {
+            match replace_escapes(&ident[..]) {
                 Ok(escaped) => {
-                    l.emit_identifier(Some(escaped.as_slice()));
+                    l.emit_identifier(Some(&escaped[..]));
                     return Some(StateFn(lex_start));
                 },
                 Err(msg) => {
@@ -1123,7 +1124,7 @@ fn is_initial(ch: char) -> bool {
 /// `is_special_initial` returns true if `ch` is a special subsequent for identifiers.
 #[inline]
 fn is_special_initial(ch: char) -> bool {
-    "!$%&*/:<=>?^_~".contains_char(ch)
+    "!$%&*/:<=>?^_~".contains(ch)
 }
 
 /// `is_subsequent` returns true if `ch` is a subsequent identifier character.
@@ -1193,7 +1194,7 @@ fn replace_escapes(text: &str) -> Result<String, &'static str> {
                             }
                         }
                         // verify this is a valid inline hex escape value
-                        match num::from_str_radix::<u32>(hex.as_slice(), 16) {
+                        match num::from_str_radix::<u32>(&hex[..], 16) {
                             Ok(code) => {
                                 match char::from_u32(code) {
                                     Some(x) => result.push(x),
@@ -1255,7 +1256,7 @@ mod test {
         for er in expected.iter() {
             if let Some(token) = rx.recv().ok() {
                 assert_eq!(token.typ, er.0);
-                assert_eq!(token.val.as_slice(), er.1);
+                assert_eq!(&token.val[..], er.1);
                 assert_eq!(token.row, er.2);
                 assert_eq!(token.col, er.3);
             } else {
@@ -1280,7 +1281,7 @@ mod test {
                     panic!("lex failed for {} with {}", input, token.val);
                 }
                 assert_eq!(token.typ, er.0);
-                assert_eq!(token.val.as_slice(), er.1);
+                assert_eq!(&token.val[..], er.1);
             } else {
                 assert!(false, "ran out of tokens");
             }
