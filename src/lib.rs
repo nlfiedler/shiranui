@@ -17,7 +17,6 @@
 // TODO: should be able to remove these once the API stabilizes
 #![feature(collections)]   // to_lowercase()
 #![feature(core)]          // std::error::Error, num::from_str_radix
-#![feature(str_char)]      // char_at() and friends
 
 pub mod atom;
 pub mod lexer;

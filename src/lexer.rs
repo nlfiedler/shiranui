@@ -42,6 +42,7 @@
 use std::char;
 use std::fmt;
 use std::num;
+use std::str::CharIndices;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 
@@ -111,20 +112,24 @@ impl fmt::Display for Token {
 }
 
 /// The `Lexer` struct holds the state of the lexical analyzer.
-struct Lexer {
+struct Lexer<'a> {
     // used only for error reports
     name: String,
     // the string being scanned
-    input: String,
-    // start position of the current token
+    input: &'a str,
+    // iterator of the characters in the string
+    iter: CharIndices<'a>,
+    // the next character to return, if peek() has been called
+    peeked: Option<(usize, char)>,
+    // start position of the current token (in bytes)
     start: usize,
-    // current position within the input
+    // position of next character to read (in bytes)
     pos: usize,
-    // width of last character read from input
+    // width of last character read from input (in bytes)
     width: usize,
     // current line of program text being read
     row: usize,
-    // current column of text being read
+    // current column of text being read (in characters)
     col: usize,
     // true if fold-case is enabled
     folding: bool,
@@ -132,20 +137,22 @@ struct Lexer {
     chan: SyncSender<Token>
 }
 
-impl fmt::Display for Lexer {
+impl<'a> fmt::Display for Lexer<'a> {
 
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Lexer for '{}' at offset {}", self.name, self.pos)
     }
 }
 
-impl Lexer {
+impl<'a> Lexer<'a> {
 
     /// `new` constructs an instance of `Lexer` for the named input.
-    fn new(name: String, input: String, chan: SyncSender<Token>) -> Lexer {
+    fn new(name: String, input: &'a str, chan: SyncSender<Token>) -> Lexer<'a> {
         Lexer {
             name: name,
             input: input,
+            iter: input.char_indices(),
+            peeked: None,
             start: 0,
             pos: 0,
             width: 0,
@@ -178,7 +185,7 @@ impl Lexer {
             row: self.row,
             col: self.col
         });
-        self.start = self.pos
+        self.start = self.pos;
     }
 
     /// emit_text passes the given token back to the client via the channel.
@@ -197,18 +204,12 @@ impl Lexer {
     /// Otherwise, no folding is performed before emitting the token, per the
     /// default. If the `ident` parameter is `None`, the current token text will
     /// be emitted, otherwise the value of `ident` is emitted.
-    fn emit_identifier(&mut self, ident: Option<&str>) {
-        let text;
-        if let Some(id) = ident {
-            text = id;
-        } else {
-            text = &self.input[self.start..self.pos];
-        }
+    fn emit_identifier(&mut self, ident: &str) {
         let output;
         if self.folding {
-            output = text.to_lowercase();
+            output = ident.to_lowercase();
         } else {
-            output = text.to_string();
+            output = ident.to_string();
         }
         let _ = self.chan.send(Token {
             typ: TokenType::Identifier,
@@ -216,7 +217,7 @@ impl Lexer {
             row: self.row,
             col: self.col
         });
-        self.start = self.pos
+        self.start = self.pos;
     }
 
     /// `token_length` returns the length of the current token.
@@ -239,33 +240,35 @@ impl Lexer {
 
     /// `next` returns the next rune in the input, or `None` if at the end.
     fn next(&mut self) -> Option<char> {
-        if self.pos >= self.input.len() {
-            // signal that nothing was read this time
-            self.width = 0;
-            None
+        let next = if self.peeked.is_some() {
+            self.peeked.take()
         } else {
-            let next = self.input.char_range_at(self.pos);
-            self.width = next.next - self.pos;
-            self.pos = next.next;
-            // advance row/col values in lexer
-            if next.ch == '\n' {
-                self.row += 1;
-                self.col = 0;
-            } else {
-                // counting characters, not bytes
-                self.col += 1;
-            }
-            Some(next.ch)
+            self.iter.next()
+        };
+        match next {
+            Some((pos, ch)) => {
+                self.width = ch.len_utf8();
+                self.pos = pos + self.width;
+                if ch == '\n' {
+                    self.row += 1;
+                    self.col = 0;
+                } else {
+                    self.col += 1;
+                }
+                Some(ch)
+            },
+            None => None
         }
     }
 
     /// `peek` returns but does not consume the next rune in the input.
     fn peek(&mut self) -> Option<char> {
-        if self.pos >= self.input.len() {
-            None
-        } else {
-            let next = self.input.char_range_at(self.pos);
-            Some(next.ch)
+        if self.peeked.is_none() {
+            self.peeked = self.iter.next();
+        }
+        match self.peeked {
+            Some((_, ch)) => Some(ch),
+            None => None
         }
     }
 
@@ -290,49 +293,26 @@ impl Lexer {
         self.start = self.pos;
     }
 
-    /// `backup` steps back one rune. Can be called only once per call to next.
-    fn backup(&mut self) {
-        // if width is zero, next() reached eof, don't adjust anything this time
-        if self.width > 0 {
-            self.pos -= self.width;
-            if self.input[self.pos..].chars().next().unwrap() == '\n' {
-                // move row/col to end of previously scanned line
-                self.row -= 1;
-                self.compute_column();
-            } else {
-                self.col -= self.width;
-            }
-        }
-        let prev = self.input.char_range_at_reverse(self.pos);
-        self.width = self.pos - prev.next;
-    }
-
     /// `rewind` moves the current position back to the start of the current token.
     fn rewind(&mut self) {
-        while self.pos > self.start {
-            let prev = self.input.char_range_at_reverse(self.pos);
-            self.pos = prev.next;
-            if prev.ch == '\n' {
-                self.row -= 1;
-            }
-        }
-        self.compute_column();
-        let pc = self.input.char_range_at_reverse(self.pos);
-        self.width = self.pos - pc.next;
-    }
+        // recompute the correct row value
+        self.row -= self.input[self.start..self.pos].chars().filter(|c| *c == '\n').count();
+        self.pos = self.start;
 
-    /// `compute_column` updates the `col` field to the correct value after
-    /// having moved the `pos` to its new position within the `input` text.
-    fn compute_column(&mut self) {
-        let prior = &self.input[..self.pos];
-        // assume there is no newline within this slice
+        // recompute the correct column value
         let mut nl = 0;
-        if let Some(pos) = prior.rfind('\n') {
+        if let Some(pos) = self.input[..self.pos].rfind('\n') {
             // don't count the newline itself
             nl = pos + 1;
         }
-        let subset = &self.input[nl..self.pos];
-        self.col = subset.chars().count();
+        self.col = self.input[nl..self.pos].chars().count();
+
+        self.width = 0;
+        self.peeked = None;
+        self.iter = self.input.char_indices();
+        for _ in 0..self.start {
+            self.iter.next();
+        }
     }
 
     /// `accept` consumes the next rune if it's from the valid set.
@@ -384,9 +364,9 @@ pub fn lex(name: &str, input: &str) -> Receiver<Token> {
     let thread_name = name.to_string();
 
     thread::spawn(move || {
-        let mut lexer = Lexer::new(thread_name, sanitized, thread_tx);
+        let mut lexer = Lexer::new(thread_name, &*sanitized, thread_tx);
         // inform the compiler what the type of state _really_ is
-        let mut state = lex_start as fn(&mut Lexer) -> Option<StateFn>;
+        let mut state: fn(&mut Lexer) -> Option<StateFn> = lex_start;
         loop {
             match state(&mut lexer) {
                 Some(next) => {
@@ -441,7 +421,7 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
                 return Some(StateFn(lex_unquote));
             },
             '0' ... '9' => {
-                l.backup();
+                l.rewind();
                 return Some(StateFn(lex_number));
             },
             '+' | '-' => {
@@ -461,7 +441,7 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
             },
             _ => {
                 // almost certainly an identifier
-                l.backup();
+                l.rewind();
                 return Some(StateFn(lex_identifier));
             }
         }
@@ -693,12 +673,12 @@ fn lex_x_character(l: &mut Lexer) -> Option<StateFn> {
             text.push('#');
             text.push('\\');
             text.push('x');
-            while let Some(ch) = l.next() {
+            while let Some(ch) = l.peek() {
                 if is_delimiter(ch) {
-                    l.backup();
                     break;
                 } else {
                     text.push(ch);
+                    l.next();
                 }
             }
             // as with numeric literals, some validation happens at parse time
@@ -1042,20 +1022,20 @@ fn lex_identifier(l: &mut Lexer) -> Option<StateFn> {
     // cannot be anything but an identifier, and we simply proceed with
     // that understanding.
     let mut ident = String::new();
-    while let Some(ch) = l.next() {
+    while let Some(ch) = l.peek() {
         // These conditions cover the "peculiar identifier", and "initial"
         // and "special initial" are buried in here, as well.
         if is_explicit_sign(ch) || is_subsequent(ch) ||
                 is_sign_subsequent(ch) || is_dot_subsequent(ch) {
             ident.push(ch);
+            l.next();
         } else if is_delimiter(ch) {
-            l.backup();
             break;
         } else {
             return errorf(l, "improperly terminated identifier");
         }
     }
-    l.emit_identifier(Some(&ident[..]));
+    l.emit_identifier(&ident[..]);
     return Some(StateFn(lex_start));
 }
 
@@ -1093,7 +1073,7 @@ fn lex_pipe_identifier(l: &mut Lexer) -> Option<StateFn> {
             ident.push(ch);
             match replace_escapes(&ident[..]) {
                 Ok(escaped) => {
-                    l.emit_identifier(Some(&escaped[..]));
+                    l.emit_identifier(&escaped[..]);
                     return Some(StateFn(lex_start));
                 },
                 Err(msg) => {
