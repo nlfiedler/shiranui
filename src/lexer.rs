@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 //!
-//! A lexical analyzer for Scheme R7RS, fashioned after that which was
-//! presented by Rob Pike in the "Lexical Scanning in Go" talk
-//! (http://cuddle.googlecode.com/hg/talk/lex.html). The general idea is
-//! that the lexer produces tokens and sends them to a channel, from which
-//! a parser would consume them. This allows the lexer code to be written
-//! in a very straightforward and clear manner.
+//! A lexical analyzer for Scheme R7RS.
+//!
+//! Fashioned after that which was presented by Rob Pike in the "Lexical
+//! Scanning in Go" talk (http://cuddle.googlecode.com/hg/talk/lex.html).
+//! The general idea is that the lexer produces tokens and sends them to a
+//! channel, from which a parser would consume them. This allows the lexer
+//! code to be written in a very straightforward and clear manner.
 //!
 //! The design of the lexer involves a finite state machine consisting of
 //! function pointers. The starting function determines which function
@@ -46,6 +47,12 @@ use std::str::CharIndices;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 
+/// Defines the type of a particular token.
+///
+/// Everything in Scheme is represented by a token and its corresponding
+/// type, including strings, numbers, lists, vectors, quoting constructs,
+/// and special symbols.
+///
 #[derive(Copy, PartialEq, Debug)]
 pub enum TokenType {
     Error,
@@ -96,11 +103,20 @@ impl fmt::Display for TokenType {
     }
 }
 
+/// Represents a single token emitted by the lexer.
+///
+/// Tokens have a type (`TokenType`), string value, and location within the
+/// input text.
+///
 #[derive(PartialEq, Debug)]
 pub struct Token {
+    /// The type of the token.
     pub typ: TokenType,
+    /// Text of the token, typically taken directly from the input.
     pub val: String,
+    /// Line on which the token was encountered.
     pub row: usize,
+    /// Column position of the _end_ of the token.
     pub col: usize
 }
 
@@ -355,8 +371,12 @@ impl<'a> Lexer<'a> {
 /// Cannot use recursive types, as in Go, so must wrap in a struct.
 struct StateFn(fn(&mut Lexer) -> Option<StateFn>);
 
-/// lex initializes the lexer to lex the given Scheme input text, returning
-/// the channel receiver from which tokens are received.
+/// Initiates the lexical analysis of the given input text.
+///
+/// The lex function initializes the lexer to analyze the given Scheme
+/// input text, returning the channel receiver from which tokens are
+/// received.
+///
 pub fn lex(name: &str, input: &str) -> Receiver<Token> {
     let sanitized = sanitize_input(input);
     let (tx, rx) = mpsc::sync_channel(1);
