@@ -114,9 +114,9 @@ pub struct Token {
     pub typ: TokenType,
     /// Text of the token, typically taken directly from the input.
     pub val: String,
-    /// Line on which the token was encountered.
+    /// Line (1-based) on which the token was encountered.
     pub row: usize,
-    /// Column position of the _end_ of the token.
+    /// Column position (0-based) of the _end_ of the token.
     pub col: usize
 }
 

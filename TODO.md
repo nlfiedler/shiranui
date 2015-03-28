@@ -2,24 +2,15 @@
 
 ## Overall
 
-* Develop a crate containing both a library and a binary (the REPL)
-* Goal is R7RS compliance in the form of a library and an accompanying REPL
+* Develop a crate containing both a library and a binary (the REPL).
+* Goal is R7RS compliance in the form of a library and an accompanying REPL.
 
 ## Road Map
 
-* Try turning off the feature flags and see what squawks
-    * Need a `to_lowercase()`
-* Move the identifier case folding to the parser
-    * Simplify the lexer
-        * No more emit_*() special cases
-        * Parser does pipe identifier and string character escape processing
-        * Look at eliminating the rewind() usage
-        * Consider using a "source map" to avoid recomputing row/col in rewind()
-            * Source map would have byte offsets of start of each line
-    * For (include-ci) should do this in the parser anyway
-    * Lexer should emit directives, in case the next Scheme revision has more complex ones
-* Garbage collector
-* Environment: basically use mal/rust/env.rs, but with BTreeMap
+* Consider whether a garbage collector is necessary.
+    * Both Rust and C++ Make-a-Lisp implementations use reference counting.
+    * Rust makes reference counting easy and fool-proof.
+* Environment: basically use `mal/rust/env.rs`, but with `BTreeMap` instead of `HashMap`.
 * Pairs, vectors, byte vectors
     * No use creating a "sequence" type
     * Only lists are allowed when calling functions
@@ -59,8 +50,8 @@
 
 ### Data Types
 
-* Environment, sometimes referred to elsewhere as an "activation"
-    * Use the std::collections::BTreeMap to map symbols to values
+* Environment, sometimes referred to elsewhere as an "activation".
+    * Use the `std::collections::BTreeMap` to map symbols to values.
 * New Serializable trait will provide API for writing and reading elements in binary.
     * Individual things know how to serialize and deserialize themselves.
 * New Runnable trait will provide a `run()` function.
@@ -68,4 +59,4 @@
     * Compiling an expression results in a Runnable that knows to invoke the VM.
 * A Closure would be the combination of a Runnable and an Environment.
 * New Arguments trait will provide behavior for lambda arguments.
-    * Support proper lists, improper lists, as well as a single symbol
+    * Support proper lists, improper lists, as well as a single symbol.
