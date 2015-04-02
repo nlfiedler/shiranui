@@ -14,11 +14,6 @@
  * limitations under the License.
  */
 
-// TODO: should be able to remove these once the API stabilizes
-#![allow(deprecated)]      // num::from_str_radix
-#![feature(collections)]   // to_lowercase()
-#![feature(core)]          // std::error::Error, num::from_str_radix
-
 pub mod atom;
 pub mod lexer;
 pub mod sequence;

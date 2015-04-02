@@ -21,7 +21,6 @@ use std::char;
 use std::cmp::{PartialOrd, Ordering};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
-use std::num;
 
 #[derive(Eq, Hash, PartialEq, Debug)]
 pub enum Value {
@@ -242,7 +241,7 @@ pub fn char_from_str(s: &str) -> Result<char, ParseCharError> {
         "#\\null"      => Ok('\0'),
         _ => {
             if s.len() > 3 && s.starts_with("#\\x") {
-                match num::from_str_radix::<u32>(&s[3..], 16) {
+                match u32::from_str_radix(&s[3..], 16) {
                     Ok(code) => {
                         match char::from_u32(code) {
                             Some(ch) => Ok(ch),

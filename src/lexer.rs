@@ -42,7 +42,6 @@
 
 use std::char;
 use std::fmt;
-use std::num;
 use std::str::CharIndices;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
@@ -197,7 +196,7 @@ impl<'a> Lexer<'a> {
         let text = &self.input[self.start..self.pos];
         let _ = self.chan.send(Token {
             typ: t,
-            val: text.to_lowercase(),
+            val: to_lowercase(text),
             row: self.row,
             col: self.col
         });
@@ -223,7 +222,7 @@ impl<'a> Lexer<'a> {
     fn emit_identifier(&mut self, ident: &str) {
         let output;
         if self.folding {
-            output = ident.to_lowercase();
+            output = to_lowercase(ident);
         } else {
             output = ident.to_string();
         }
@@ -247,7 +246,7 @@ impl<'a> Lexer<'a> {
     fn token_matches(&mut self, query: &str, folding: bool) -> bool {
         let text = &self.input[self.start..self.pos];
         if folding {
-            let lower_text = text.to_lowercase();
+            let lower_text = to_lowercase(text);
             &lower_text[..] == query
         } else {
             text == query
@@ -295,7 +294,7 @@ impl<'a> Lexer<'a> {
         if self.input.len() - self.pos >= q_len {
             let text = &self.input[self.pos..self.pos + q_len];
             return if folding {
-                let lower_text = text.to_lowercase();
+                let lower_text = to_lowercase(text);
                 &lower_text[..] == query
             } else {
                 text == query
@@ -1164,6 +1163,13 @@ fn sanitize_input(input: &str) -> String {
     input.replace("\r\n", "\n").replace("\r", "\n")
 }
 
+/// `to_lowercase` converts the given string to its lowercase form.
+fn to_lowercase(input: &str) -> String {
+    let mut s = String::with_capacity(input.len());
+    s.extend(input.chars().flat_map(|c| c.to_lowercase()));
+    return s;
+}
+
 /// `replace_escapes` replaces any \xNNNN; escape sequences with the Unicode
 /// code point identified by the NNNN hexadecimal value, where NNNN can be
 /// two, three, or four hexadecimal digits. The code point must be valid.
@@ -1194,7 +1200,7 @@ fn replace_escapes(text: &str) -> Result<String, &'static str> {
                             }
                         }
                         // verify this is a valid inline hex escape value
-                        match num::from_str_radix::<u32>(&hex[..], 16) {
+                        match u32::from_str_radix(&hex[..], 16) {
                             Ok(code) => {
                                 match char::from_u32(code) {
                                     Some(x) => result.push(x),
@@ -1225,7 +1231,7 @@ fn replace_escapes(text: &str) -> Result<String, &'static str> {
 #[cfg(test)]
 mod test {
 
-    use super::{lex, replace_escapes, sanitize_input, TokenType};
+    use super::{lex, replace_escapes, sanitize_input, to_lowercase, TokenType};
     use std::collections::HashMap;
     use std::vec::Vec;
 
@@ -1333,6 +1339,14 @@ mod test {
         assert_eq!(replace_escapes("\\xD801;").unwrap_err(), "invalid UTF code point");
         assert_eq!(replace_escapes("\\xGGGG;").unwrap_err(), "invalid hexadecimal escape code");
         assert_eq!(replace_escapes("\\").unwrap_err(), "reached EOF after \\ escape");
+    }
+
+    #[test]
+    fn test_to_lowercase() {
+        assert_eq!(to_lowercase("abc"), "abc");
+        assert_eq!(to_lowercase("ABC"), "abc");
+        assert_eq!(to_lowercase("aBc"), "abc");
+        assert_eq!(to_lowercase("AbC"), "abc");
     }
 
     #[test]

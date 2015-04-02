@@ -18,12 +18,9 @@
 //!
 // TODO: write more module documentation
 
-// TODO: remove once the code matures
-#![allow(dead_code)]
-
-pub struct Pair {
-    // TODO: See `std::collections::DList` for the `Node<T>` type and how it works
-    // TODO: change i32 to Value and figure out the lifetime business
-    first: i32,
-    rest: i32
-}
+// pub struct Pair {
+//     // TODO: See `std::collections::DList` for the `Node<T>` type and how it works
+//     // TODO: change i32 to Value and figure out the lifetime business
+//     first: i32,
+//     rest: i32
+// }
