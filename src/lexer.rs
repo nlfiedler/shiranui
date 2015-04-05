@@ -52,7 +52,7 @@ use std::thread;
 /// type, including strings, numbers, lists, vectors, quoting constructs,
 /// and special symbols.
 ///
-#[derive(Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum TokenType {
     Error,
     OpenParen,
