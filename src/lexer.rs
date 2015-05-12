@@ -379,11 +379,10 @@ struct StateFn(fn(&mut Lexer) -> Option<StateFn>);
 pub fn lex(name: &str, input: &str) -> Receiver<Token> {
     let sanitized = sanitize_input(input);
     let (tx, rx) = mpsc::sync_channel(1);
-    let thread_tx = tx.clone();
     let thread_name = name.to_string();
 
     thread::spawn(move || {
-        let mut lexer = Lexer::new(thread_name, &*sanitized, thread_tx);
+        let mut lexer = Lexer::new(thread_name, &*sanitized, tx);
         // inform the compiler what the type of state _really_ is
         let mut state: fn(&mut Lexer) -> Option<StateFn> = lex_start;
         loop {
