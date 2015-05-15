@@ -7,8 +7,9 @@
 
 ## Road Map
 
-* Define a `ValueType` that wraps a `Value` in an `Rc`
-    - Model after the data types in `mal/rust/types.env`
+* Look through lexer code for explicit case analysis and see if `Option` combinators can be used to simplify the code [^2]
+    - e.g. `map()`, `or()`, `and_then()`
+* Garbage collector
 * Pairs, vectors, byte vectors
     - No use creating a "sequence" type
     - Only lists are allowed when calling functions
@@ -17,6 +18,7 @@
 * Environment: borrow from oxischeme
     - Environment is used during syntactic analysis (`HashMap` is sufficient)
     - Compiles into an activation for faster execution (uses a `Vector`)
+        + Matt Might seems to call the activation a "store" [^1]
 * Parser
     - Parser produces tuples of location and expression
     - Interpreter/Compiler can then use location in error reporting
@@ -32,6 +34,37 @@
 * Standard procedures
 * REPL
     - Readline support: https://github.com/gwenn/rust-readline
+
+## Design
+
+### Garbage collection
+
+* Define a type that is a reference to objects on the heap
+    - Implement the `std::ops::Deref` trait to dereference the "pointer"
+    - Similar to the `ArenaPtr` type in oxischeme
+* Having a level of indirection allows for a compacting collector
+* Having a compacting collector allows for a generational collector
+* Generational collectors tend to have shorter pause times
+* Model collection strategy after Ruby
+    - An "object space" that contains the collection of heaps
+        + Oxischeme calls this the "heap"
+        + Oxischeme's heap contains "arenas"
+        + Oxischeme's arenas are equivalent to Ruby heap pages
+    - "Eden" heap is a list of heap pages with some objects in them
+    - "Tomb" heap is a list of heap pages with no objects in them
+    - Each heap page has a free list
+    - Each heap page has its own set of mark bits
+* Oxischeme design
+    - `Value` is an enum of Scheme values
+    - Simple things are encoded in the `Value` itself (e.g. characters)
+    - Heap allocated things (e.g. strings) have a "pointer" to an arena thing
+    - `ArenaPtr` forms the basis of all references in oxischeme
+        + Holds mutable reference to the arena
+        + Has index into arena pool
+        + Arena has a pool of objects (vector)
+        + Implements `Deref` to acquire pointer to element in arena pool
+* Define a `Value` type that wraps a `ValueType` enum in a reference
+    - Model after the data types in `mal/rust/types.env`
 
 ## Improvements to Make over Bakeneko
 
@@ -61,3 +94,6 @@
 * A Closure would be the combination of a Runnable and an Environment.
 * New Arguments trait will provide behavior for lambda arguments.
     - Support proper lists, improper lists, as well as a single symbol.
+
+[^1]: http://matt.might.net/articles/cesk-machines/
+[^2]: http://blog.rust-lang.org/2015/05/11/traits.html
