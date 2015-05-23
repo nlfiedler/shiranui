@@ -24,18 +24,21 @@ To be completely honest, I had in mind the legendary [creature](http://en.wikipe
 The astute reader will notice that I have a similar project written in Go (bakeneko, another legendary creature from Japan). So why stop working on that one and start another in a new language? Let me count the ways...
 
 * Rust has a richer type system
-    * Real enums (sum types) that can be used with pattern matching
-        * Go has only integers and the `iota` keyword
-    * Generics to enable honest-to-goodness reusable collections
-        * Avoids the dreaded `interface{}` everywhere
+    - Real enums (sum types) that can be used with pattern matching
+        + Go has only integers and the `iota` keyword
+    - Generics to enable honest-to-goodness reusable collections
+        + Avoids the dreaded `interface{}` everywhere
 * Rust does not have a `nil` value, the infamous billion dollar mistake
-    * While Rust has `()`, it has its own type (`unit`), so cannot be used mistakenly
+    - While Rust has `()`, it has its own type (`unit`), so cannot be used mistakenly
 * Rust has pattern matching which prevents missed cases
 * Rust is expression oriented (i.e. `if` is an expression)
+* Rust uses nominal subtyping instead of structural subtyping
+    - Easier when reading new code, easier to maintain existing code
 * Rust permits fine-grained visibility of program items via nested modules
-* Additional reasons given in these two, nicely written posts:
-    * http://crufter.com/2014/12/01/everyday-hassles-in-go/
-    * http://yager.io/programming/go.html
+* Additional reasons given in these well written posts:
+    - http://crufter.com/2014/12/01/everyday-hassles-in-go/
+    - http://yager.io/programming/go.html
+    - http://bravenewgeek.com/go-is-unapologetically-flawed-heres-why-we-use-it/
 
 ### Other Scheme interpreters in Rust
 
