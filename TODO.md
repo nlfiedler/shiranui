@@ -10,6 +10,8 @@
 * Look through lexer code for explicit case analysis and see if `Option` combinators can be used to simplify the code [^2]
     - e.g. `map()`, `or()`, `and_then()`
 * Garbage collector
+    - See https://github.com/fitzgen/rajan-bacon-cc
+    - See https://github.com/Manishearth/rust-gc
 * Pairs, vectors, byte vectors
     - No use creating a "sequence" type
     - Only lists are allowed when calling functions
