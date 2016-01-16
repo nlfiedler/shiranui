@@ -7,6 +7,7 @@
 
 ## Road Map
 
+* Should change `atom::Value` to implement `From` traits rather than having `new` methods.
 * Look through lexer code for explicit case analysis and see if `Option` combinators can be used to simplify the code [^2]
     - e.g. `map()`, `or()`, `and_then()`
 * Garbage collector

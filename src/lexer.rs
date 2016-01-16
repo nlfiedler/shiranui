@@ -220,12 +220,11 @@ impl<'a> Lexer<'a> {
     /// default. If the `ident` parameter is `None`, the current token text will
     /// be emitted, otherwise the value of `ident` is emitted.
     fn emit_identifier(&mut self, ident: &str) {
-        let output;
-        if self.folding {
-            output = to_lowercase(ident);
+        let output = if self.folding {
+            to_lowercase(ident)
         } else {
-            output = ident.to_string();
-        }
+            ident.to_string()
+        };
         let _ = self.chan.send(Token {
             typ: TokenType::Identifier,
             val: output,
@@ -337,12 +336,13 @@ impl<'a> Lexer<'a> {
                 if valid.contains(ch) {
                     // consume the character
                     self.next();
-                    return true;
+                    true
+                } else {
+                    false
                 }
             },
-            None => return false
+            None => false
         }
-        false
     }
 
     /// `accept_run` consumes a run of runes from the valid set.
@@ -411,63 +411,62 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
         match ch {
             '(' => {
                 l.emit(TokenType::OpenParen);
-                return Some(StateFn(lex_start));
+                Some(StateFn(lex_start))
             },
             ')' => {
                 l.emit(TokenType::CloseParen);
-                return Some(StateFn(lex_start));
+                Some(StateFn(lex_start))
             },
             '"' => {
-                return Some(StateFn(lex_string));
+                Some(StateFn(lex_string))
             },
             ' ' | '\t' | '\r' | '\n' => {
-                return Some(StateFn(lex_separator));
+                Some(StateFn(lex_separator))
             },
             ';' => {
-                return Some(StateFn(lex_comment));
+                Some(StateFn(lex_comment))
             },
             '#' => {
-                return Some(StateFn(lex_hash));
+                Some(StateFn(lex_hash))
             },
             '[' | ']' | '{' | '}' => {
-                return errorf(l, "use of reserved character");
+                errorf(l, "use of reserved character")
             },
             '\'' | '`' => {
-                return Some(StateFn(lex_quote));
+                Some(StateFn(lex_quote))
             },
             ',' => {
-                return Some(StateFn(lex_unquote));
+                Some(StateFn(lex_unquote))
             },
             '0' ... '9' => {
                 l.rewind();
-                return Some(StateFn(lex_number));
+                Some(StateFn(lex_number))
             },
             '+' | '-' => {
-                return Some(StateFn(lex_explicit_sign));
+                Some(StateFn(lex_explicit_sign))
             },
             '.' => {
-                return Some(StateFn(lex_dot));
+                Some(StateFn(lex_dot))
             },
             '@' => {
-                return errorf(l, "@ cannot be the start of a token");
+                errorf(l, "@ cannot be the start of a token")
             },
             '\\' => {
-                return errorf(l, "\\ cannot be the start of a token");
+                errorf(l, "\\ cannot be the start of a token")
             },
             '|' => {
-                return Some(StateFn(lex_pipe_identifier));
+                Some(StateFn(lex_pipe_identifier))
             },
             _ => {
                 // almost certainly an identifier
                 l.rewind();
-                return Some(StateFn(lex_identifier));
+                Some(StateFn(lex_identifier))
             }
         }
     } else {
         l.emit(TokenType::EndOfFile);
-        return None;
+        None
     }
-    unreachable!();
 }
 
 /// `lex_string` expects the current character to be a double-quote and
@@ -536,7 +535,7 @@ fn lex_comment(l: &mut Lexer) -> Option<StateFn> {
             _ => continue
         }
     }
-    return Some(StateFn(lex_start));
+    Some(StateFn(lex_start))
 }
 
 /// lex_block_comment expects the current position to be the start of a block
@@ -576,14 +575,14 @@ fn lex_block_comment(l: &mut Lexer) -> Option<StateFn> {
             _ => continue
         }
     }
-    return errorf(l, "unclosed block comment");
+    errorf(l, "unclosed block comment")
 }
 
 /// `lex_hash` processes all of the # tokens.
 fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
     if let Some(ch) = l.next() {
         match ch {
-            '|' => return Some(StateFn(lex_block_comment)),
+            '|' => Some(StateFn(lex_block_comment)),
             't' | 'f' => {
                 // allow for #true and #false
                 l.accept_run("aelrsu");
@@ -599,16 +598,16 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
                     }
                 }
                 l.emit(TokenType::Boolean);
-                return Some(StateFn(lex_start));
+                Some(StateFn(lex_start))
             },
             '(' => {
                 l.emit(TokenType::Vector);
-                return Some(StateFn(lex_start));
+                Some(StateFn(lex_start))
             },
             ';' => {
                 // emit line comment; parser does the real work
                 l.emit(TokenType::Comment);
-                return Some(StateFn(lex_start));
+                Some(StateFn(lex_start))
             },
             'u' => {
                 // byte vector support (e.g. #u8(...))
@@ -623,7 +622,7 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
                     }
                     return errorf(l, "invalid byte vector expression");
                 }
-                return errorf(l, "reached EOF in byte vector expression");
+                errorf(l, "reached EOF in byte vector expression")
             },
             '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' => {
                 l.accept_run("0123456789");
@@ -638,7 +637,7 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
                 } else {
                     return errorf(l, "reached EOF in label expression")
                 }
-                return Some(StateFn(lex_start));
+                Some(StateFn(lex_start))
             },
             '!' => {
                 // handle #!fold-case and #!no-fold-case directives (R7RS 2.1)
@@ -651,7 +650,7 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
                     return errorf(l, "invalid Scheme directive");
                 }
                 l.ignore();
-                return Some(StateFn(lex_start));
+                Some(StateFn(lex_start))
             },
             '\\' => {
                 if let Some(ch) = l.peek() {
@@ -661,19 +660,18 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
                 } else {
                     return errorf(l, "reached EOF in character literal")
                 }
-                return Some(StateFn(lex_character));
+                Some(StateFn(lex_character))
             },
             'b' | 'd' | 'e' | 'i' | 'o' | 'x' => {
                 // let lex_number sort out the prefix
                 l.rewind();
-                return Some(StateFn(lex_number));
+                Some(StateFn(lex_number))
             },
-            _ => return errorf(l, "unrecognized hash value")
+            _ => errorf(l, "unrecognized hash value")
         }
     } else {
-        return errorf(l, "reached EOF in hash expression")
+        errorf(l, "reached EOF in hash expression")
     }
-    unreachable!();
 }
 
 /// `lex_x_character` determines if the #\x is just a single letter or
@@ -749,7 +747,7 @@ fn lex_character(l: &mut Lexer) -> Option<StateFn> {
         }
         l.emit(TokenType::Character);
     }
-    return Some(StateFn(lex_start));
+    Some(StateFn(lex_start))
 }
 
 /// `lex_quote` processes the special quoting characters (' and `).
@@ -1031,7 +1029,7 @@ fn lex_explicit_sign(l: &mut Lexer) -> Option<StateFn> {
     }
     // if we ran out of tokens, it's an identifier
     l.rewind();
-    return Some(StateFn(lex_identifier));
+    Some(StateFn(lex_identifier))
 }
 
 /// `lex_identifier` processes the text as an identifier.
@@ -1054,7 +1052,7 @@ fn lex_identifier(l: &mut Lexer) -> Option<StateFn> {
         }
     }
     l.emit_identifier(&ident[..]);
-    return Some(StateFn(lex_start));
+    Some(StateFn(lex_start))
 }
 
 /// `lex_pipe_identifier` expects the first character to be a vertical
@@ -1102,7 +1100,7 @@ fn lex_pipe_identifier(l: &mut Lexer) -> Option<StateFn> {
             ident.push(ch);
         }
     }
-    return errorf(l, "reached EOF in |identifier| expression");
+    errorf(l, "reached EOF in |identifier| expression")
 }
 
 /// `is_delimiter` returns true if `ch` is a delimiter character.
@@ -1166,7 +1164,7 @@ fn sanitize_input(input: &str) -> String {
 fn to_lowercase(input: &str) -> String {
     let mut s = String::with_capacity(input.len());
     s.extend(input.chars().flat_map(|c| c.to_lowercase()));
-    return s;
+    s
 }
 
 /// `replace_escapes` replaces any \xNNNN; escape sequences with the Unicode
