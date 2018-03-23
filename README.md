@@ -40,7 +40,7 @@ The astute reader will notice that I have a similar project written in Go (baken
     - http://crufter.com/2014/12/01/everyday-hassles-in-go/
     - http://yager.io/programming/go.html
     - http://bravenewgeek.com/go-is-unapologetically-flawed-heres-why-we-use-it/
-    - http://vagabond.github.io/rants/2015/06/05/a-year-with-go/
+    - http://vagabond.github.io/rants/2015/06/05/a-year-with-go
 
 ### Other Scheme interpreters in Rust
 
