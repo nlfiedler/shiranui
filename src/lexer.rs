@@ -72,11 +72,10 @@ pub enum TokenType {
     ByteVector,
     LabelDefinition,
     LabelReference,
-    EndOfFile
+    EndOfFile,
 }
 
 impl fmt::Display for TokenType {
-
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             TokenType::Error => write!(f, "Error"),
@@ -116,13 +115,16 @@ pub struct Token {
     /// Line (1-based) on which the token was encountered.
     pub row: usize,
     /// Column position (0-based) of the _end_ of the token.
-    pub col: usize
+    pub col: usize,
 }
 
 impl fmt::Display for Token {
-
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Token[{}: '{}' <{}:{}>]", self.typ, self.val, self.row, self.col)
+        write!(
+            f,
+            "Token[{}: '{}' <{}:{}>]",
+            self.typ, self.val, self.row, self.col
+        )
     }
 }
 
@@ -149,18 +151,16 @@ struct Lexer<'a> {
     // true if fold-case is enabled
     folding: bool,
     // channel sender for scanned tokens
-    chan: SyncSender<Token>
+    chan: SyncSender<Token>,
 }
 
 impl<'a> fmt::Display for Lexer<'a> {
-
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Lexer for '{}' at offset {}", self.name, self.pos)
     }
 }
 
 impl<'a> Lexer<'a> {
-
     /// `new` constructs an instance of `Lexer` for the named input.
     fn new(name: String, input: &'a str, chan: SyncSender<Token>) -> Lexer<'a> {
         Lexer {
@@ -174,7 +174,7 @@ impl<'a> Lexer<'a> {
             row: 1,
             col: 0,
             folding: false,
-            chan: chan
+            chan: chan,
         }
     }
 
@@ -185,7 +185,7 @@ impl<'a> Lexer<'a> {
             typ: t,
             val: text.to_string(),
             row: self.row,
-            col: self.col
+            col: self.col,
         });
         self.start = self.pos;
     }
@@ -198,7 +198,7 @@ impl<'a> Lexer<'a> {
             typ: t,
             val: to_lowercase(text),
             row: self.row,
-            col: self.col
+            col: self.col,
         });
         self.start = self.pos;
     }
@@ -209,7 +209,7 @@ impl<'a> Lexer<'a> {
             typ: t,
             val: text.to_string(),
             row: self.row,
-            col: self.col
+            col: self.col,
         });
         self.start = self.pos;
     }
@@ -229,7 +229,7 @@ impl<'a> Lexer<'a> {
             typ: TokenType::Identifier,
             val: output,
             row: self.row,
-            col: self.col
+            col: self.col,
         });
         self.start = self.pos;
     }
@@ -270,8 +270,8 @@ impl<'a> Lexer<'a> {
                     self.col += 1;
                 }
                 Some(ch)
-            },
-            None => None
+            }
+            None => None,
         }
     }
 
@@ -282,7 +282,7 @@ impl<'a> Lexer<'a> {
         }
         match self.peeked {
             Some((_, ch)) => Some(ch),
-            None => None
+            None => None,
         }
     }
 
@@ -297,7 +297,7 @@ impl<'a> Lexer<'a> {
                 &lower_text[..] == query
             } else {
                 text == query
-            }
+            };
         }
         false
     }
@@ -310,7 +310,10 @@ impl<'a> Lexer<'a> {
     /// `rewind` moves the current position back to the start of the current token.
     fn rewind(&mut self) {
         // recompute the correct row value
-        self.row -= self.input[self.start..self.pos].chars().filter(|c| *c == '\n').count();
+        self.row -= self.input[self.start..self.pos]
+            .chars()
+            .filter(|c| *c == '\n')
+            .count();
         self.pos = self.start;
 
         // recompute the correct column value
@@ -340,25 +343,20 @@ impl<'a> Lexer<'a> {
                 } else {
                     false
                 }
-            },
-            None => false
+            }
+            None => false,
         }
     }
 
     /// `accept_run` consumes a run of runes from the valid set.
     fn accept_run(&mut self, valid: &str) -> bool {
         let old_pos = self.pos;
-        loop {
-            match self.peek() {
-                Some(ch) => {
-                    if valid.contains(ch) {
-                        // consume the character
-                        self.next();
-                    } else {
-                        break;
-                    }
-                },
-                None => break
+        while let Some(ch) = self.peek() {
+            if valid.contains(ch) {
+                // consume the character
+                self.next();
+            } else {
+                break;
             }
         }
         old_pos < self.pos
@@ -385,14 +383,9 @@ pub fn lex(name: &str, input: &str) -> Receiver<Token> {
         let mut lexer = Lexer::new(thread_name, &*sanitized, tx);
         // inform the compiler what the type of state _really_ is
         let mut state: fn(&mut Lexer) -> Option<StateFn> = lex_start;
-        loop {
-            match state(&mut lexer) {
-                Some(next) => {
-                    let StateFn(state_fn) = next;
-                    state = state_fn;
-                },
-                None => break
-            }
+        while let Some(next) = state(&mut lexer) {
+            let StateFn(state_fn) = next;
+            state = state_fn;
         }
     });
     rx
@@ -412,51 +405,27 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
             '(' => {
                 l.emit(TokenType::OpenParen);
                 Some(StateFn(lex_start))
-            },
+            }
             ')' => {
                 l.emit(TokenType::CloseParen);
                 Some(StateFn(lex_start))
-            },
-            '"' => {
-                Some(StateFn(lex_string))
-            },
-            ' ' | '\t' | '\r' | '\n' => {
-                Some(StateFn(lex_separator))
-            },
-            ';' => {
-                Some(StateFn(lex_comment))
-            },
-            '#' => {
-                Some(StateFn(lex_hash))
-            },
-            '[' | ']' | '{' | '}' => {
-                errorf(l, "use of reserved character")
-            },
-            '\'' | '`' => {
-                Some(StateFn(lex_quote))
-            },
-            ',' => {
-                Some(StateFn(lex_unquote))
-            },
-            '0' ... '9' => {
+            }
+            '"' => Some(StateFn(lex_string)),
+            ' ' | '\t' | '\r' | '\n' => Some(StateFn(lex_separator)),
+            ';' => Some(StateFn(lex_comment)),
+            '#' => Some(StateFn(lex_hash)),
+            '[' | ']' | '{' | '}' => errorf(l, "use of reserved character"),
+            '\'' | '`' => Some(StateFn(lex_quote)),
+            ',' => Some(StateFn(lex_unquote)),
+            '0'...'9' => {
                 l.rewind();
                 Some(StateFn(lex_number))
-            },
-            '+' | '-' => {
-                Some(StateFn(lex_explicit_sign))
-            },
-            '.' => {
-                Some(StateFn(lex_dot))
-            },
-            '@' => {
-                errorf(l, "@ cannot be the start of a token")
-            },
-            '\\' => {
-                errorf(l, "\\ cannot be the start of a token")
-            },
-            '|' => {
-                Some(StateFn(lex_pipe_identifier))
-            },
+            }
+            '+' | '-' => Some(StateFn(lex_explicit_sign)),
+            '.' => Some(StateFn(lex_dot)),
+            '@' => errorf(l, "@ cannot be the start of a token"),
+            '\\' => errorf(l, "\\ cannot be the start of a token"),
+            '|' => Some(StateFn(lex_pipe_identifier)),
             _ => {
                 // almost certainly an identifier
                 l.rewind();
@@ -490,25 +459,25 @@ fn lex_string(l: &mut Lexer) -> Option<StateFn> {
                 } else {
                     return errorf(l, "improperly terminated string");
                 }
-            },
+            }
             '"' => {
                 // reached the end of the string
                 match replace_escapes(&text[..]) {
                     Ok(escaped) => {
                         l.emit_text(TokenType::String, &escaped[..]);
                         return Some(StateFn(lex_start));
-                    },
+                    }
                     Err(msg) => {
                         return errorf(l, msg);
                     }
                 }
-            },
+            }
             _ => {
                 text.push(ch);
             }
         }
     }
-    return errorf(l, "unclosed quoted string");
+    errorf(l, "unclosed quoted string")
 }
 
 /// `lex_separator` expects the current position to be the start of a
@@ -531,8 +500,8 @@ fn lex_comment(l: &mut Lexer) -> Option<StateFn> {
                 // but we ignore whitespace anyway
                 l.ignore();
                 return Some(StateFn(lex_start));
-            },
-            _ => continue
+            }
+            _ => continue,
         }
     }
     Some(StateFn(lex_start))
@@ -550,12 +519,12 @@ fn lex_block_comment(l: &mut Lexer) -> Option<StateFn> {
                 if let Some(ch) = l.next() {
                     match ch {
                         '|' => nesting += 1,
-                        _ => continue
+                        _ => continue,
                     }
                 } else {
-                    break
+                    break;
                 }
-            },
+            }
             '|' => {
                 if let Some(ch) = l.next() {
                     match ch {
@@ -563,16 +532,16 @@ fn lex_block_comment(l: &mut Lexer) -> Option<StateFn> {
                             nesting -= 1;
                             if nesting == 0 {
                                 l.ignore();
-                                return Some(StateFn(lex_start))
+                                return Some(StateFn(lex_start));
                             }
-                        },
-                        _ => continue
+                        }
+                        _ => continue,
                     }
                 } else {
-                    break
+                    break;
                 }
-            },
-            _ => continue
+            }
+            _ => continue,
         }
     }
     errorf(l, "unclosed block comment")
@@ -586,9 +555,10 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
             't' | 'f' => {
                 // allow for #true and #false
                 l.accept_run("aelrsu");
-                if l.token_length() > 2 &&
-                        !l.token_matches("#true", false) &&
-                        !l.token_matches("#false", false) {
+                if l.token_length() > 2
+                    && !l.token_matches("#true", false)
+                    && !l.token_matches("#false", false)
+                {
                     return errorf(l, "invalid boolean literal");
                 }
                 if let Some(ch) = l.peek() {
@@ -599,16 +569,16 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
                 }
                 l.emit(TokenType::Boolean);
                 Some(StateFn(lex_start))
-            },
+            }
             '(' => {
                 l.emit(TokenType::Vector);
                 Some(StateFn(lex_start))
-            },
+            }
             ';' => {
                 // emit line comment; parser does the real work
                 l.emit(TokenType::Comment);
                 Some(StateFn(lex_start))
-            },
+            }
             'u' => {
                 // byte vector support (e.g. #u8(...))
                 if let Some(ch) = l.next() {
@@ -623,7 +593,7 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
                     return errorf(l, "invalid byte vector expression");
                 }
                 errorf(l, "reached EOF in byte vector expression")
-            },
+            }
             '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' => {
                 l.accept_run("0123456789");
                 if let Some(ch) = l.next() {
@@ -632,13 +602,13 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
                     } else if ch == '=' {
                         l.emit(TokenType::LabelDefinition);
                     } else {
-                        return errorf(l, "invalid label expression")
+                        return errorf(l, "invalid label expression");
                     }
                 } else {
-                    return errorf(l, "reached EOF in label expression")
+                    return errorf(l, "reached EOF in label expression");
                 }
                 Some(StateFn(lex_start))
-            },
+            }
             '!' => {
                 // handle #!fold-case and #!no-fold-case directives (R7RS 2.1)
                 l.accept_run("no-fldcase");
@@ -651,23 +621,23 @@ fn lex_hash(l: &mut Lexer) -> Option<StateFn> {
                 }
                 l.ignore();
                 Some(StateFn(lex_start))
-            },
+            }
             '\\' => {
                 if let Some(ch) = l.peek() {
                     if ch == 'x' {
                         return Some(StateFn(lex_x_character));
                     }
                 } else {
-                    return errorf(l, "reached EOF in character literal")
+                    return errorf(l, "reached EOF in character literal");
                 }
                 Some(StateFn(lex_character))
-            },
+            }
             'b' | 'd' | 'e' | 'i' | 'o' | 'x' => {
                 // let lex_number sort out the prefix
                 l.rewind();
                 Some(StateFn(lex_number))
-            },
-            _ => errorf(l, "unrecognized hash value")
+            }
+            _ => errorf(l, "unrecognized hash value"),
         }
     } else {
         errorf(l, "reached EOF in hash expression")
@@ -713,30 +683,21 @@ fn lex_character(l: &mut Lexer) -> Option<StateFn> {
         l.accept_run("abcdeiklmnoprstuw");
     }
     let folding = l.folding;
-    if l.token_matches("#\\newline", folding) {
-        l.emit_folded(TokenType::Character);
-    } else if l.token_matches("#\\space", folding) {
-        l.emit_folded(TokenType::Character);
-    } else if l.token_matches("#\\alarm", folding) {
-        l.emit_folded(TokenType::Character);
-    } else if l.token_matches("#\\backspace", folding) {
-        l.emit_folded(TokenType::Character);
-    } else if l.token_matches("#\\delete", folding) {
-        l.emit_folded(TokenType::Character);
-    } else if l.token_matches("#\\escape", folding) {
-        l.emit_folded(TokenType::Character);
-    } else if l.token_matches("#\\null", folding) {
-        l.emit_folded(TokenType::Character);
-    } else if l.token_matches("#\\return", folding) {
-        l.emit_folded(TokenType::Character);
-    } else if l.token_matches("#\\tab", folding) {
+    if l.token_matches("#\\newline", folding)
+        || l.token_matches("#\\space", folding)
+        || l.token_matches("#\\alarm", folding)
+        || l.token_matches("#\\backspace", folding)
+        || l.token_matches("#\\delete", folding)
+        || l.token_matches("#\\escape", folding)
+        || l.token_matches("#\\null", folding)
+        || l.token_matches("#\\return", folding)
+        || l.token_matches("#\\tab", folding)
+    {
         l.emit_folded(TokenType::Character);
     } else {
         // ensure we read at least one character
-        if l.token_length() < 3 {
-            if l.next() == None {
-                return errorf(l, "reached EOF in character literal");
-            }
+        if l.token_length() < 3 && l.next() == None {
+            return errorf(l, "reached EOF in character literal");
         }
         // ensure the next token is a delimiter
         if let Some(ch) = l.peek() {
@@ -775,11 +736,10 @@ struct NumberLexer {
     is_complex: bool,
     is_rational: bool,
     is_exact: bool,
-    digits: String
+    digits: String,
 }
 
 impl NumberLexer {
-
     /// `new` constructs a new instance of NumberLexer.
     fn new() -> NumberLexer {
         NumberLexer {
@@ -787,7 +747,7 @@ impl NumberLexer {
             is_complex: false,
             is_rational: false,
             is_exact: true,
-            digits: "0123456789".to_string()
+            digits: "0123456789".to_string(),
         }
     }
 
@@ -802,25 +762,25 @@ impl NumberLexer {
                 match ch {
                     'd' | 'D' => {
                         base_set += 1;
-                    },
+                    }
                     'b' | 'B' => {
                         base_set += 1;
                         self.digits = "01".to_string();
-                    },
+                    }
                     'o' | 'O' => {
                         base_set += 1;
                         self.digits = "01234567".to_string();
-                    },
+                    }
                     'x' | 'X' => {
                         base_set += 1;
                         self.digits = "0123456789abcdefABCDEF".to_string();
-                    },
+                    }
                     'e' | 'E' => {
                         exactness_set += 1;
-                    },
+                    }
                     'i' | 'I' => {
                         exactness_set += 1;
-                    },
+                    }
                     _ => {
                         // unrecognized letter, signal an error
                         base_set = 10;
@@ -915,7 +875,6 @@ impl NumberLexer {
 /// literal, and advances to the end of the literal. It will parse both
 /// integer and floating point decimal values.
 fn lex_number(l: &mut Lexer) -> Option<StateFn> {
-
     //
     // See R7RS 7.1.1 for detailed format for numeric constants
     //
@@ -947,7 +906,7 @@ fn lex_number(l: &mut Lexer) -> Option<StateFn> {
             return errorf(l, infnan_result.unwrap_err());
         }
         if !l.accept("iI") {
-            return errorf(l, "malformed complex")
+            return errorf(l, "malformed complex");
         }
     }
     let infnan_result = nl.accept_infnan(l);
@@ -963,7 +922,7 @@ fn lex_number(l: &mut Lexer) -> Option<StateFn> {
     if let Some(ch) = l.peek() {
         if !is_delimiter(ch) {
             l.next();
-            return errorf(l, "malformed number suffix")
+            return errorf(l, "malformed number suffix");
         }
     }
     if nl.is_complex {
@@ -1041,8 +1000,11 @@ fn lex_identifier(l: &mut Lexer) -> Option<StateFn> {
     while let Some(ch) = l.peek() {
         // These conditions cover the "peculiar identifier", and "initial"
         // and "special initial" are buried in here, as well.
-        if is_explicit_sign(ch) || is_subsequent(ch) ||
-                is_sign_subsequent(ch) || is_dot_subsequent(ch) {
+        if is_explicit_sign(ch)
+            || is_subsequent(ch)
+            || is_sign_subsequent(ch)
+            || is_dot_subsequent(ch)
+        {
             ident.push(ch);
             l.next();
         } else if is_delimiter(ch) {
@@ -1076,7 +1038,7 @@ fn lex_pipe_identifier(l: &mut Lexer) -> Option<StateFn> {
                     'x' => {
                         ident.push('\\');
                         ident.push(ch);
-                    },
+                    }
                     // everything else is wrong
                     _ => {
                         return errorf(l, "expected x|a|b|t|n|r after \\ in escape sequence");
@@ -1091,7 +1053,7 @@ fn lex_pipe_identifier(l: &mut Lexer) -> Option<StateFn> {
                 Ok(escaped) => {
                     l.emit_identifier(&escaped[..]);
                     return Some(StateFn(lex_start));
-                },
+                }
                 Err(msg) => {
                     return errorf(l, msg);
                 }
@@ -1107,7 +1069,7 @@ fn lex_pipe_identifier(l: &mut Lexer) -> Option<StateFn> {
 fn is_delimiter(ch: char) -> bool {
     match ch {
         ' ' | '\t' | '\r' | '\n' | '|' | '(' | ')' | '"' | ';' => true,
-        _ => false
+        _ => false,
     }
 }
 
@@ -1144,7 +1106,7 @@ fn is_special_subsequent(ch: char) -> bool {
 /// `is_dot_subsequent` returns true if `ch` is a dot subsequent for identifiers.
 #[inline]
 fn is_dot_subsequent(ch: char) -> bool {
-    is_sign_subsequent(ch) ||  ch == '.'
+    is_sign_subsequent(ch) || ch == '.'
 }
 
 /// `is_sign_subsequent` returns true if `ch` is a sign subsequent for identifiers.
@@ -1198,19 +1160,17 @@ fn replace_escapes(text: &str) -> Result<String, &'static str> {
                         }
                         // verify this is a valid inline hex escape value
                         match u32::from_str_radix(&hex[..], 16) {
-                            Ok(code) => {
-                                match char::from_u32(code) {
-                                    Some(x) => result.push(x),
-                                    None => {
-                                        return Err("invalid UTF code point");
-                                    }
+                            Ok(code) => match char::from_u32(code) {
+                                Some(x) => result.push(x),
+                                None => {
+                                    return Err("invalid UTF code point");
                                 }
                             },
                             Err(_) => {
                                 return Err("invalid hexadecimal escape code");
                             }
                         }
-                    },
+                    }
                     _ => {
                         return Err("expected x|a|b|t|n|r after \\ in escape sequence");
                     }
@@ -1237,7 +1197,7 @@ mod test {
     fn verify_success(input: &str, expected: Vec<(TokenType, &str)>) {
         let rx = lex("verify_success", input);
         for er in expected.iter() {
-            if let Some(token) = rx.recv().ok() {
+            if let Ok(token) = rx.recv() {
                 assert_eq!(token.typ, er.0);
                 assert_eq!(token.val, er.1);
             } else {
@@ -1245,7 +1205,7 @@ mod test {
             }
         }
         // make sure we have reached the end of the results
-        if let Some(token) = rx.recv().ok() {
+        if let Ok(token) = rx.recv() {
             assert_eq!(token.typ, TokenType::EndOfFile);
         } else {
             assert!(false, "should have exhausted tokens");
@@ -1257,7 +1217,7 @@ mod test {
     fn verify_locations(input: &str, expected: Vec<(TokenType, &str, usize, usize)>) {
         let rx = lex("verify_locations", input);
         for er in expected.iter() {
-            if let Some(token) = rx.recv().ok() {
+            if let Ok(token) = rx.recv() {
                 assert_eq!(token.typ, er.0);
                 assert_eq!(&token.val[..], er.1);
                 assert_eq!(token.row, er.2);
@@ -1267,7 +1227,7 @@ mod test {
             }
         }
         // make sure we have reached the end of the results
-        if let Some(token) = rx.recv().ok() {
+        if let Ok(token) = rx.recv() {
             assert_eq!(token.typ, TokenType::EndOfFile);
         } else {
             assert!(false, "should have exhausted tokens");
@@ -1279,7 +1239,7 @@ mod test {
     fn verify_singles(inputs: HashMap<&str, (TokenType, &str)>) {
         for (input, er) in inputs.iter() {
             let rx = lex("verify_singles", input);
-            if let Some(token) = rx.recv().ok() {
+            if let Ok(token) = rx.recv() {
                 if token.typ == TokenType::Error {
                     panic!("lex failed for {} with {}", input, token.val);
                 }
@@ -1296,7 +1256,7 @@ mod test {
     fn verify_errors(inputs: HashMap<&str, &str>) {
         for (input, expected) in inputs.iter() {
             let rx = lex("verify_errors", input);
-            if let Some(token) = rx.recv().ok() {
+            if let Ok(token) = rx.recv() {
                 assert_eq!(token.typ, TokenType::Error);
                 assert!(token.val.contains(expected), "expected {} error", expected);
             } else {
@@ -1322,20 +1282,44 @@ mod test {
     #[test]
     fn test_replace_escapes() {
         // normal cases
-        assert_eq!(replace_escapes("foo bar baz quux").unwrap(), "foo bar baz quux".to_string());
-        assert_eq!(replace_escapes("foo\\x20;quux").unwrap(), "foo quux".to_string());
-        assert_eq!(replace_escapes("\\x65e5;\\x672c;\\x8a9e;").unwrap(), "日本語".to_string());
+        assert_eq!(
+            replace_escapes("foo bar baz quux").unwrap(),
+            "foo bar baz quux".to_string()
+        );
+        assert_eq!(
+            replace_escapes("foo\\x20;quux").unwrap(),
+            "foo quux".to_string()
+        );
+        assert_eq!(
+            replace_escapes("\\x65e5;\\x672c;\\x8a9e;").unwrap(),
+            "日本語".to_string()
+        );
         assert_eq!(replace_escapes("\\a").unwrap(), "\x07".to_string());
         assert_eq!(replace_escapes("\\b").unwrap(), "\x08".to_string());
         assert_eq!(replace_escapes("\\t").unwrap(), "\t".to_string());
         assert_eq!(replace_escapes("\\n").unwrap(), "\n".to_string());
         assert_eq!(replace_escapes("\\r").unwrap(), "\r".to_string());
         // error cases
-        assert_eq!(replace_escapes("\\f").unwrap_err(), "expected x|a|b|t|n|r after \\ in escape sequence");
-        assert_eq!(replace_escapes("\\xAB").unwrap_err(), "missing ; after \\x escape sequence");
-        assert_eq!(replace_escapes("\\xD801;").unwrap_err(), "invalid UTF code point");
-        assert_eq!(replace_escapes("\\xGGGG;").unwrap_err(), "invalid hexadecimal escape code");
-        assert_eq!(replace_escapes("\\").unwrap_err(), "reached EOF after \\ escape");
+        assert_eq!(
+            replace_escapes("\\f").unwrap_err(),
+            "expected x|a|b|t|n|r after \\ in escape sequence"
+        );
+        assert_eq!(
+            replace_escapes("\\xAB").unwrap_err(),
+            "missing ; after \\x escape sequence"
+        );
+        assert_eq!(
+            replace_escapes("\\xD801;").unwrap_err(),
+            "invalid UTF code point"
+        );
+        assert_eq!(
+            replace_escapes("\\xGGGG;").unwrap_err(),
+            "invalid hexadecimal escape code"
+        );
+        assert_eq!(
+            replace_escapes("\\").unwrap_err(),
+            "reached EOF after \\ escape"
+        );
     }
 
     #[test]
@@ -1349,7 +1333,7 @@ mod test {
     #[test]
     fn test_empty_input() {
         let rx = lex("unit", "");
-        if let Some(token) = rx.recv().ok() {
+        if let Ok(token) = rx.recv() {
             assert_eq!(token.typ, TokenType::EndOfFile);
         } else {
             assert!(false);
@@ -1560,7 +1544,8 @@ mod test {
 
     #[test]
     fn test_floats() {
-        let inputs = r#".01 0.1 1.00 6e4 7.91e+16 3. 12#.### 1.2345e 1.2345s 1.2345f 1.2345d 1.2345l"#;
+        let inputs =
+            r#".01 0.1 1.00 6e4 7.91e+16 3. 12#.### 1.2345e 1.2345s 1.2345f 1.2345d 1.2345l"#;
         let mut vec = Vec::new();
         vec.push((TokenType::Float, ".01"));
         vec.push((TokenType::Float, "0.1"));
@@ -1717,14 +1702,20 @@ mod test {
         map.insert("|foo\\rbar|", (TokenType::Identifier, "|foo\rbar|"));
         map.insert("|foo\\|bar|", (TokenType::Identifier, "|foo|bar|"));
         map.insert("|foo\\x20;bar|", (TokenType::Identifier, "|foo bar|"));
-        map.insert("|foo\\x20;\\x20;bar|", (TokenType::Identifier, "|foo  bar|"));
+        map.insert(
+            "|foo\\x20;\\x20;bar|",
+            (TokenType::Identifier, "|foo  bar|"),
+        );
         verify_singles(map);
     }
 
     #[test]
     fn test_identifier_errors() {
         let mut map = HashMap::new();
-        map.insert("|a\\p123|", "expected x|a|b|t|n|r after \\ in escape sequence");
+        map.insert(
+            "|a\\p123|",
+            "expected x|a|b|t|n|r after \\ in escape sequence",
+        );
         map.insert("|a\\xFF|", "missing ; after \\x escape sequence");
         map.insert("|a\\xXYZ;|", "invalid hexadecimal escape code");
         map.insert("|a\\xD801;|", "invalid UTF code point");
@@ -1788,37 +1779,37 @@ mod test {
         1
         (* n (fact (- n 1))))))"#;
         let mut vec = Vec::new();
-        vec.push((TokenType::OpenParen,  "(",      2, 1));
+        vec.push((TokenType::OpenParen, "(", 2, 1));
         vec.push((TokenType::Identifier, "define", 2, 7));
-        vec.push((TokenType::Identifier, "fact",   2, 12));
-        vec.push((TokenType::OpenParen,  "(",      3, 3));
+        vec.push((TokenType::Identifier, "fact", 2, 12));
+        vec.push((TokenType::OpenParen, "(", 3, 3));
         vec.push((TokenType::Identifier, "lambda", 3, 9));
-        vec.push((TokenType::OpenParen,  "(",      3, 11));
-        vec.push((TokenType::Identifier, "n",      3, 12));
-        vec.push((TokenType::CloseParen, ")",      3, 13));
-        vec.push((TokenType::OpenParen,  "(",      4, 5));
-        vec.push((TokenType::Identifier, "if",     4, 7));
-        vec.push((TokenType::OpenParen,  "(",      4, 9));
-        vec.push((TokenType::Identifier, "<=",     4, 11));
-        vec.push((TokenType::Identifier, "n",      4, 13));
-        vec.push((TokenType::Integer,    "#x01",   4, 18));
-        vec.push((TokenType::CloseParen, ")",      4, 19));
-        vec.push((TokenType::Integer,    "1",      5, 9));
-        vec.push((TokenType::OpenParen,  "(",      6, 9));
-        vec.push((TokenType::Identifier, "*",      6, 10));
-        vec.push((TokenType::Identifier, "n",      6, 12));
-        vec.push((TokenType::OpenParen,  "(",      6, 14));
-        vec.push((TokenType::Identifier, "fact",   6, 18));
-        vec.push((TokenType::OpenParen,  "(",      6, 20));
-        vec.push((TokenType::Identifier, "-",      6, 21));
-        vec.push((TokenType::Identifier, "n",      6, 23));
-        vec.push((TokenType::Integer,    "1",      6, 25));
-        vec.push((TokenType::CloseParen, ")",      6, 26));
-        vec.push((TokenType::CloseParen, ")",      6, 27));
-        vec.push((TokenType::CloseParen, ")",      6, 28));
-        vec.push((TokenType::CloseParen, ")",      6, 29));
-        vec.push((TokenType::CloseParen, ")",      6, 30));
-        vec.push((TokenType::CloseParen, ")",      6, 31));
+        vec.push((TokenType::OpenParen, "(", 3, 11));
+        vec.push((TokenType::Identifier, "n", 3, 12));
+        vec.push((TokenType::CloseParen, ")", 3, 13));
+        vec.push((TokenType::OpenParen, "(", 4, 5));
+        vec.push((TokenType::Identifier, "if", 4, 7));
+        vec.push((TokenType::OpenParen, "(", 4, 9));
+        vec.push((TokenType::Identifier, "<=", 4, 11));
+        vec.push((TokenType::Identifier, "n", 4, 13));
+        vec.push((TokenType::Integer, "#x01", 4, 18));
+        vec.push((TokenType::CloseParen, ")", 4, 19));
+        vec.push((TokenType::Integer, "1", 5, 9));
+        vec.push((TokenType::OpenParen, "(", 6, 9));
+        vec.push((TokenType::Identifier, "*", 6, 10));
+        vec.push((TokenType::Identifier, "n", 6, 12));
+        vec.push((TokenType::OpenParen, "(", 6, 14));
+        vec.push((TokenType::Identifier, "fact", 6, 18));
+        vec.push((TokenType::OpenParen, "(", 6, 20));
+        vec.push((TokenType::Identifier, "-", 6, 21));
+        vec.push((TokenType::Identifier, "n", 6, 23));
+        vec.push((TokenType::Integer, "1", 6, 25));
+        vec.push((TokenType::CloseParen, ")", 6, 26));
+        vec.push((TokenType::CloseParen, ")", 6, 27));
+        vec.push((TokenType::CloseParen, ")", 6, 28));
+        vec.push((TokenType::CloseParen, ")", 6, 29));
+        vec.push((TokenType::CloseParen, ")", 6, 30));
+        vec.push((TokenType::CloseParen, ")", 6, 31));
         verify_locations(input, vec);
     }
 }
