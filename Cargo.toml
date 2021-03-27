@@ -1,5 +1,8 @@
 [package]
-
 name = "shiranui"
 version = "0.0.1"
 authors = ["Nathan Fiedler <nathanfiedler@fastmail.fm>"]
+edition = "2018"
+description = "Incomplete attempt at Scheme R7RS interpreter."
+readme = "README.md"
+license = "Apache-2.0"

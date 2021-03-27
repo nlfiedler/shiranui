@@ -417,7 +417,7 @@ fn lex_start(l: &mut Lexer) -> Option<StateFn> {
             '[' | ']' | '{' | '}' => errorf(l, "use of reserved character"),
             '\'' | '`' => Some(StateFn(lex_quote)),
             ',' => Some(StateFn(lex_unquote)),
-            '0'...'9' => {
+            '0'..='9' => {
                 l.rewind();
                 Some(StateFn(lex_number))
             }

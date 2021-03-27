@@ -1,6 +1,6 @@
 ## An incomplete Scheme R7RS interpreter in Rust
 
-Eventually this will be a complete [Scheme](http://scheme-reports.org) interpreter written in the [Rust](http://rust-lang.org) programming language. The current target is Scheme R7RS. There is much work to be done, touched on briefly in the TODO section below.
+An incomplete attempt at a [Scheme](http://scheme-reports.org) interpreter written in the [Rust](http://rust-lang.org) programming language.
 
 ### TODO
 

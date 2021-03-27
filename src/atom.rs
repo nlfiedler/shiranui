@@ -275,7 +275,7 @@ enum CharErrorKind {
 impl Display for ParseCharError {
 
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        self.description().fmt(f)
+        write!(f, "{}", self)
     }
 }
 
